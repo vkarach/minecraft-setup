@@ -10,6 +10,8 @@ dependencies = [
 
 [project.scripts]
 minecraft-setup = "minecraft_setup.cli:main"
+
+[project.gui-scripts]
 minecraft-setup-gui = "minecraft_setup.gui.app:main"
 
 [dependency-groups]
