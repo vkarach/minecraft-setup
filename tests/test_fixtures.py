@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from conftest import make_jar, make_world
+from helpers import make_jar, make_world
 
 
 def test_game_has_empty_mods_and_saves(game):
