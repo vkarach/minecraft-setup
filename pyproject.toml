@@ -1,0 +1,26 @@
+[project]
+name = "minecraft-setup"
+version = "0.1.0"
+description = "Manage a Minecraft Fabric modpack: profiles, worlds, sync and export"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pywebview>=6.2.1",
+]
+
+[project.scripts]
+minecraft-setup = "minecraft_setup.cli:main"
+minecraft-setup-gui = "minecraft_setup.gui.app:main"
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.22.3",
+    "pytest>=9.1.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

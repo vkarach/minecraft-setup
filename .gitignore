@@ -1,0 +1,15 @@
+.venv/
+dist/
+build/
+__pycache__/
+*.spec.bak
+docs/superpowers/
+.superpowers/
+TlauncherProfiles.json
+launcher_profiles.json
+usercache.json
+saves*
+logs
+crash-reports
+xaero
+*.jar
