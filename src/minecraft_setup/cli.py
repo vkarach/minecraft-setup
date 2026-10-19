@@ -2,6 +2,8 @@ import argparse
 import os
 import subprocess
 import sys
+import sysconfig
+import tomllib
 import zipfile
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -15,13 +17,14 @@ from minecraft_setup.engine.profiles import GuardError, assign, switch
 from minecraft_setup.engine.worlds import list_worlds
 
 DEFAULT_GAME_DIR = Path(os.environ.get("APPDATA", "~")).expanduser() / ".minecraft"
-DEFAULT_REPO = Path(__file__).resolve().parents[2]
+PACKAGE_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_NAME = "minecraft-setup"
 SHORTCUT_NAME = "Minecraft Setup"
 GUI_EXE = "minecraft-setup-gui.exe"
 _MAKE_SHORTCUT = (
     "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:MS_LNK); "
     "$s.TargetPath = $env:MS_TARGET; $s.WorkingDirectory = $env:MS_WORKDIR; "
-    "$s.Description = $env:MS_NAME; $s.WindowStyle = 7; $s.Save()"
+    "$s.Description = $env:MS_NAME; $s.Save()"
 )
 
 
@@ -80,20 +83,43 @@ def _assign(args: argparse.Namespace) -> int:
     return 0
 
 
+def _is_project(folder: Path) -> bool:
+    try:
+        data = tomllib.loads((folder / "pyproject.toml").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return data.get("project", {}).get("name") == PROJECT_NAME
+
+
+def _repo(args: argparse.Namespace) -> Path | None:
+    """--repo, then MINECRAFT_SETUP_REPO, then the package's own checkout when it is this project."""
+    if args.repo:
+        return args.repo
+    if os.environ.get("MINECRAFT_SETUP_REPO"):
+        return Path(os.environ["MINECRAFT_SETUP_REPO"])
+    return PACKAGE_ROOT if _is_project(PACKAGE_ROOT) else None
+
+
+def _app_exe(args: argparse.Namespace) -> Path | None:
+    repo = _repo(args)
+    if repo is None:
+        if args.parts and "app" in args.parts:
+            raise GuardError("Cannot find the repo for the app exe - pass --repo or set MINECRAFT_SETUP_REPO.")
+        return None
+    exe = repo / "dist" / "minecraft-setup.exe"
+    return exe if exe.is_file() else None
+
+
 def _export(args: argparse.Namespace) -> int:
     game = GameDir(args.game_dir)
-    exe = args.repo / "dist" / "minecraft-setup.exe"
-    try:
-        path = export(
-            game,
-            set(args.parts) if args.parts else None,
-            include_solo=args.solo,
-            out_dir=game.root / "exports",
-            app_exe=exe if exe.is_file() else None,
-            running=_running,
-        )
-    except ValueError as error:
-        raise GuardError(str(error)) from error
+    path = export(
+        game,
+        set(args.parts) if args.parts else None,
+        include_solo=args.solo,
+        out_dir=game.root / "exports",
+        app_exe=_app_exe(args),
+        running=_running,
+    )
     with zipfile.ZipFile(path) as archive:
         count = len(archive.namelist())
     chosen = ", ".join(p for p in PARTS if p in args.parts) if args.parts else "all"
@@ -101,9 +127,17 @@ def _export(args: argparse.Namespace) -> int:
     return 0
 
 
+def _gui_target() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable)
+    return Path(sysconfig.get_path("scripts")) / GUI_EXE
+
+
 def install_shortcut(start_menu: Path) -> Path:
     """Create the Start menu shortcut to the GUI exe that sits next to this interpreter."""
-    target = Path(sys.executable).resolve().parent / GUI_EXE
+    target = _gui_target()
+    if not target.is_file():
+        raise GuardError(f"Cannot create the shortcut: {target} does not exist.")
     start_menu.mkdir(parents=True, exist_ok=True)
     lnk = start_menu / f"{SHORTCUT_NAME}.lnk"
     env = {
@@ -140,7 +174,7 @@ def _common() -> argparse.ArgumentParser:
         default=Path(os.environ.get("MINECRAFT_DIR") or DEFAULT_GAME_DIR),
         help="the .minecraft folder (default: %%MINECRAFT_DIR%% or %%APPDATA%%\\.minecraft)",
     )
-    common.add_argument("--repo", type=Path, default=DEFAULT_REPO, help="the minecraft-setup repo folder")
+    common.add_argument("--repo", type=Path, help="the minecraft-setup repo folder (default: MINECRAFT_SETUP_REPO)")
     return common
 
 

@@ -1,11 +1,11 @@
 import re
 import zipfile
-from pathlib import Path
 
 import pytest
 
 from helpers import CLIENT, FULL, SOLO, busy, idle, make_jar
-from minecraft_setup.engine.export import PARTS, export
+from minecraft_setup.engine.export import PARTS, ExportError, export
+from minecraft_setup.engine.gamedir import GameDir
 from minecraft_setup.engine.profiles import GameRunningError
 
 
@@ -116,9 +116,9 @@ def test_app_part_ships_exe(game, tmp_path):
     assert path.name.startswith("modpack-app-")
     assert entries(path) == ["minecraft-setup.exe"]
     assert "minecraft-setup.exe" in entries(run(game, tmp_path, app_exe=exe))
-    with pytest.raises(ValueError, match="app"):
+    with pytest.raises(ExportError, match="app"):
         run(game, tmp_path, {"app"}, app_exe=tmp_path / "missing.exe")
-    with pytest.raises(ValueError, match="app"):
+    with pytest.raises(ExportError, match="app"):
         run(game, tmp_path, {"app"})
     assert "minecraft-setup.exe" not in entries(run(game, tmp_path))
     assert "minecraft-setup.exe" not in entries(run(game, tmp_path, app_exe=tmp_path / "missing.exe"))
@@ -126,32 +126,75 @@ def test_app_part_ships_exe(game, tmp_path):
 
 def test_never_packs_deny_list(game, tmp_path):
     populate(game)
-    config = game.root / "config"
+    root = game.root
     for name in ("usercache.json", "TlauncherProfiles.json", "launcher_profiles.json"):
-        (config / name).write_text("x")
-    for folder in ("logs", "crash-reports", "xaero", "saves-full-profile"):
-        (config / folder).mkdir()
-        (config / folder / "f.txt").write_text("x")
-    (config / "stray.jar").write_text("x")
-    (game.root / "shaderpacks" / "saves").mkdir()
-    (game.root / "shaderpacks" / "saves" / "f.txt").write_text("x")
+        (root / name).write_text("x")
+        (root / "config" / name.upper()).write_text("x")
+    for folder in ("logs", "crash-reports", "xaero", "saves-full-profile", "saves"):
+        (root / folder).mkdir(exist_ok=True)
+        (root / folder / "f.txt").write_text("x")
+    (root / "config" / "stray.jar").write_text("x")
     names = entries(run(game, tmp_path, include_solo=True))
     assert "config/mod.json" in names
-    assert not [n for n in names if re.search(r"usercache|Profiles\.json|logs|crash-reports|xaero|saves", n)]
+    assert not [n for n in names if re.search(r"(?i)usercache|Profiles\.json|logs|crash-reports|xaero|saves", n)]
     assert "config/stray.jar" not in names
     assert "mods/fabric-api.jar" in names
+
+
+def test_nested_xaero_config_is_exported(game, tmp_path):
+    populate(game)
+    nested = game.root / "config" / "xaero" / "minimap"
+    nested.mkdir(parents=True)
+    (nested / "client.cfg").write_text("x")
+    assert "config/xaero/minimap/client.cfg" in entries(run(game, tmp_path, {"config"}))
+
+
+def test_zip_written_atomically_and_never_overwritten(game, tmp_path):
+    populate(game)
+    first = run(game, tmp_path, {"options"})
+    second = run(game, tmp_path, {"options"})
+    third = run(game, tmp_path, {"options"})
+    assert len({first, second, third}) == 3
+    assert second.name == first.name.replace(".zip", "-2.zip")
+    assert third.name == first.name.replace(".zip", "-3.zip")
+    assert sorted(p.name for p in first.parent.iterdir()) == sorted([first.name, second.name, third.name])
+
+
+def test_failed_export_leaves_no_partial(game, tmp_path, monkeypatch):
+    populate(game)
+
+    def boom(self, *args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(zipfile.ZipFile, "write", boom)
+    with pytest.raises(OSError):
+        run(game, tmp_path, {"options"})
+    assert list((tmp_path / "out").iterdir()) == []
 
 
 def test_parts_constant():
     assert PARTS == ("mods", "config", "resourcepacks", "shaders", "options", "servers", "skins", "app")
 
 
-def test_unknown_part_rejected(game, tmp_path):
-    with pytest.raises(ValueError, match="nope"):
+def test_unknown_and_empty_parts_rejected(game, tmp_path):
+    with pytest.raises(ExportError, match="nope"):
         run(game, tmp_path, {"nope"})
+    with pytest.raises(ExportError, match="No export parts"):
+        run(game, tmp_path, set())
 
 
-def test_bracket_names_survive(game, tmp_path):
+def test_bracket_names_survive(tmp_path):
+    root = tmp_path / "[x] game" / ".minecraft"
+    game = GameDir(root)
+    (root / "mods").mkdir(parents=True)
     make_jar(game, "40 world [x] - a.jar")
-    assert mod_entries(run(game, tmp_path, {"mods"})) == ["mods/40 world [x] - a.jar"]
-    assert isinstance(Path(run(game, tmp_path, {"mods"})), Path)
+    (root / "resourcepacks" / "[pack] one").mkdir(parents=True)
+    (root / "resourcepacks" / "[pack] one" / "pack.mcmeta").write_text("{}")
+    (root / "config" / "[cfg]").mkdir(parents=True)
+    (root / "config" / "[cfg]" / "a.json").write_text("{}")
+    names = entries(run(game, tmp_path, {"mods", "resourcepacks", "config"}))
+    assert names == [
+        "config/[cfg]/a.json",
+        "mods/40 world [x] - a.jar",
+        "resourcepacks/[pack] one/pack.mcmeta",
+    ]

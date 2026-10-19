@@ -1,11 +1,12 @@
 import zipfile
 from collections.abc import Callable, Iterator
 from datetime import datetime
+from itertools import count
 from pathlib import Path
 
 from minecraft_setup.engine.gamedir import GameDir
 from minecraft_setup.engine.mods import SOLO_GROUPS, list_mods
-from minecraft_setup.engine.profiles import GameRunningError
+from minecraft_setup.engine.profiles import GameRunningError, GuardError
 
 PARTS = ("mods", "config", "resourcepacks", "shaders", "options", "servers", "skins", "app")
 APP_ENTRY = "minecraft-setup.exe"
@@ -25,12 +26,17 @@ _DENY_FILES = frozenset({"tlauncherprofiles.json", "launcher_profiles.json", "us
 _DENY_DIRS = frozenset({"logs", "crash-reports", "xaero"})
 
 
+class ExportError(GuardError):
+    """An export request that cannot be fulfilled; nothing was written."""
+
+
 def _denied(rel: Path, *, jars_allowed: bool) -> bool:
     if rel.name.lower() in _DENY_FILES:
         return True
     if not jars_allowed and rel.suffix.lower() == ".jar":
         return True
-    return any(p.lower() in _DENY_DIRS or p.lower().startswith("saves") for p in rel.parts[:-1])
+    top = rel.parts[0].lower()
+    return top in _DENY_DIRS or top.startswith("saves")
 
 
 def _files(game: GameDir, part: str, skipped: set[Path]) -> Iterator[Path]:
@@ -57,12 +63,14 @@ def export(
     running: Callable[[], bool],
 ) -> Path:
     """Zip the chosen parts of the game dir for a friend; `None` means every part that exists."""
+    if parts is not None and not parts:
+        raise ExportError("No export parts chosen.")
     unknown = sorted(set(parts or ()) - set(PARTS))
     if unknown:
-        raise ValueError(f"Unknown export part: {', '.join(unknown)}")
+        raise ExportError(f"Unknown export part: {', '.join(unknown)}")
     has_exe = app_exe is not None and app_exe.is_file()
     if parts is not None and "app" in parts and not has_exe:
-        raise ValueError("The 'app' part needs the built app exe, and none was found - build it first.")
+        raise ExportError("The 'app' part needs the built app exe, and none was found - build it first.")
     selected = [p for p in PARTS if (p in parts if parts is not None else p != "app" or has_exe)]
     if _SAVED_ON_EXIT.intersection(selected) and running():
         raise GameRunningError()
@@ -78,8 +86,19 @@ def export(
     if include_solo:
         label += "+solo"
     out_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = out_dir / f"modpack-{label}-{datetime.now():%Y-%m-%d_%H-%M}.zip"
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        for file, name in entries:
-            archive.write(file, name)
-    return zip_path
+    stem = f"modpack-{label}-{datetime.now():%Y-%m-%d_%H-%M}"
+    final = out_dir / f"{stem}.zip"
+    for n in count(2):
+        if not final.exists():
+            break
+        final = out_dir / f"{stem}-{n}.zip"
+    partial = out_dir / f"{final.name}.partial"
+    try:
+        with zipfile.ZipFile(partial, "w", zipfile.ZIP_DEFLATED) as archive:
+            for file, name in entries:
+                archive.write(file, name)
+        partial.rename(final)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    return final

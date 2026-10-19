@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import sysconfig
 import zipfile
 from pathlib import Path
 
@@ -120,13 +121,17 @@ def test_game_dir_from_env(game, capsys, monkeypatch):
     assert "Current profile: vanilla" in capsys.readouterr().out
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows shortcuts")
-def test_install_shortcut_creates_lnk(tmp_path, capsys):
-    menu = tmp_path / "Programs"
-    assert cli.main(["install-shortcut", "--start-menu", str(menu)]) == 0
-    lnk = menu / "Minecraft Setup.lnk"
-    assert lnk.is_file()
-    read = "(New-Object -ComObject WScript.Shell).CreateShortcut($env:LNK) | ForEach-Object { $_.TargetPath; $_.WindowStyle }"
+def fake_scripts(tmp_path, monkeypatch, exists=True):
+    scripts = tmp_path / "Scripts"
+    scripts.mkdir()
+    if exists:
+        (scripts / "minecraft-setup-gui.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(sysconfig, "get_path", lambda name: str(scripts))
+    return scripts / "minecraft-setup-gui.exe"
+
+
+def shortcut_props(lnk):
+    read = "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:LNK); $s.TargetPath; $s.WindowStyle"
     result = subprocess.run(
         ["powershell.exe", "-NoProfile", "-Command", read],
         capture_output=True,
@@ -134,6 +139,88 @@ def test_install_shortcut_creates_lnk(tmp_path, capsys):
         check=True,
         env={**os.environ, "LNK": str(lnk)},
     )
-    target, style = result.stdout.splitlines()
-    assert Path(target) == Path(sys.executable).parent / "minecraft-setup-gui.exe"
-    assert style == "7"
+    return result.stdout.splitlines()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows shortcuts")
+def test_install_shortcut_creates_lnk(tmp_path, monkeypatch):
+    exe = fake_scripts(tmp_path, monkeypatch)
+    menu = tmp_path / "Programs"
+    assert cli.main(["install-shortcut", "--start-menu", str(menu)]) == 0
+    target, style = shortcut_props(menu / "Minecraft Setup.lnk")
+    assert Path(target) == exe
+    assert style == "1"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows shortcuts")
+def test_install_shortcut_frozen_targets_running_exe(tmp_path, monkeypatch):
+    fake_scripts(tmp_path, monkeypatch, exists=False)
+    app = tmp_path / "friend" / "minecraft-setup.exe"
+    app.parent.mkdir()
+    app.write_bytes(b"MZ")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(app))
+    menu = tmp_path / "Programs"
+    assert cli.main(["install-shortcut", "--start-menu", str(menu)]) == 0
+    assert Path(shortcut_props(menu / "Minecraft Setup.lnk")[0]) == app
+
+
+def test_install_shortcut_refuses_missing_target(tmp_path, monkeypatch, capsys):
+    fake_scripts(tmp_path, monkeypatch, exists=False)
+    menu = tmp_path / "Programs"
+    assert cli.main(["install-shortcut", "--start-menu", str(menu)]) == 1
+    assert "minecraft-setup-gui.exe" in capsys.readouterr().out
+    assert not menu.exists()
+
+
+def make_repo(folder, name="minecraft-setup", exe=True):
+    (folder / "dist").mkdir(parents=True)
+    (folder / "pyproject.toml").write_text(f'[project]\nname = "{name}"\n')
+    if exe:
+        (folder / "dist" / "minecraft-setup.exe").write_bytes(b"MZ")
+    return folder
+
+
+def export_app(game, *extra):
+    return cli.main(["export", "--game-dir", str(game.root), "--parts", "app", *extra])
+
+
+def zip_names(game):
+    [path] = (game.root / "exports").glob("*.zip")
+    with zipfile.ZipFile(path) as archive:
+        return archive.namelist()
+
+
+def test_repo_option_beats_env(game, tmp_path, monkeypatch):
+    monkeypatch.setenv("MINECRAFT_SETUP_REPO", str(make_repo(tmp_path / "env", exe=False)))
+    monkeypatch.setattr(cli, "PACKAGE_ROOT", tmp_path / "nowhere")
+    repo = make_repo(tmp_path / "opt")
+    assert export_app(game, "--repo", str(repo)) == 0
+    assert zip_names(game) == ["minecraft-setup.exe"]
+
+
+def test_repo_from_env(game, tmp_path, monkeypatch):
+    monkeypatch.setenv("MINECRAFT_SETUP_REPO", str(make_repo(tmp_path / "env")))
+    monkeypatch.setattr(cli, "PACKAGE_ROOT", tmp_path / "nowhere")
+    assert export_app(game) == 0
+
+
+def test_repo_from_package_root_when_it_is_the_project(game, tmp_path, monkeypatch):
+    monkeypatch.delenv("MINECRAFT_SETUP_REPO", raising=False)
+    monkeypatch.setattr(cli, "PACKAGE_ROOT", make_repo(tmp_path / "pkg"))
+    assert export_app(game) == 0
+
+
+def test_repo_unresolved_refuses(game, tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("MINECRAFT_SETUP_REPO", raising=False)
+    monkeypatch.setattr(cli, "PACKAGE_ROOT", make_repo(tmp_path / "other", name="something-else"))
+    assert export_app(game) == 1
+    assert "--repo" in capsys.readouterr().out
+    assert not (game.root / "exports").exists()
+    assert cli.main(["export", "--game-dir", str(game.root), "--parts", "mods"]) == 0
+
+
+def test_export_unknown_exe_is_guard_error(game, tmp_path, capsys):
+    repo = make_repo(tmp_path / "repo", exe=False)
+    assert export_app(game, "--repo", str(repo)) == 1
+    assert "app exe" in capsys.readouterr().out
