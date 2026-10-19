@@ -1,7 +1,7 @@
 import re
 import subprocess
 
-_GAME = re.compile(r"net\.fabricmc|KnotClient")
+_GAME = re.compile(r"net\.fabricmc|KnotClient", re.IGNORECASE)
 _QUERY = (
     "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
     "Get-CimInstance Win32_Process -Filter \"Name LIKE 'java%'\" | ForEach-Object { $_.CommandLine }"

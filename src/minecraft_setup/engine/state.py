@@ -1,5 +1,8 @@
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 
 from minecraft_setup.engine.gamedir import GameDir
 
@@ -20,5 +23,14 @@ def read_since(game: GameDir) -> datetime:
 
 
 def write_since(game: GameDir, when: datetime) -> None:
+    """Replace the state file in one step so a crash never leaves it half-written."""
     text = json.dumps({"since": when.astimezone().isoformat()}, indent=4) + "\n"
-    game.state_file.write_text(text, encoding="ascii")
+    target = game.state_file
+    handle, temp = tempfile.mkstemp(dir=target.parent, prefix=target.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="ascii") as stream:
+            stream.write(text)
+        os.replace(temp, target)
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
