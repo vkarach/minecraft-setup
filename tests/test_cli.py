@@ -391,7 +391,7 @@ def test_restore_hash_mismatch_exit_1(game, tmp_path, offline, capsys):
 
 
 def test_restore_interrupted_reports_progress(game, tmp_path, offline, capsys, monkeypatch):
-    partial = RestoreReport(downloaded=["40 world - terralith.jar"], configs=["options.txt"])
+    partial = RestoreReport(downloaded=["40 world - terralith.jar"], configs=["options.txt"], leftovers=[".restore-x"])
     partial.switch = SwitchReport(hidden=["A"])
 
     def interrupted(*args, **kwargs):
@@ -402,6 +402,7 @@ def test_restore_interrupted_reports_progress(game, tmp_path, offline, capsys, m
     out = capsys.readouterr().out
     assert "  get  40 world - terralith.jar" in out
     assert "  cfg  options.txt" in out
+    assert "  left .restore-x - a download folder that could not be removed, delete it by hand" in out
     assert "  hid  world 'A'" in out
     assert "some changes were already made" in out and "access denied" in out
     assert "Restored" not in out

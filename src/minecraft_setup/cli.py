@@ -210,6 +210,8 @@ def _print_restore(game: GameDir, report: RestoreReport, target: Profile) -> Non
         print(f"  skip {rel} - not part of the config set")
     for rel in report.configs:
         print(f"  cfg  {rel}")
+    for name in report.leftovers:
+        print(f"  left {name} - a download folder that could not be removed, delete it by hand")
     if report.backup is not None:
         print(f"  backup {report.backup}")
     if report.switch is not None:

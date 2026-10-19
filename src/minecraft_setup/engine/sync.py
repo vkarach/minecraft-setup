@@ -47,6 +47,7 @@ class RestoreReport:
     pruned: list[str] = field(default_factory=list)
     configs: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    leftovers: list[str] = field(default_factory=list)
     backup: Path | None = None
     switch: SwitchReport | None = None
 
@@ -162,13 +163,22 @@ def _read_lock(repo: Path) -> Lock:
         raise GuardError(f"Cannot read {path}: {error}") from error
 
 
-def _clean_staging(game: GameDir) -> None:
+def _remove(path: Path) -> bool:
+    """Delete a staging folder without ever failing the restore; False when some of it is left."""
+    try:
+        shutil.rmtree(path)
+    except OSError:
+        pass
+    return not path.exists()
+
+
+def _clean_staging(game: GameDir, report: RestoreReport) -> None:
     """Remove download folders that an interrupted restore left behind."""
-    if not game.root.is_dir():
+    try:
+        stale = [p for p in game.root.iterdir() if p.name.startswith(_STAGING) and p.is_dir() and not is_link(p)]
+    except OSError:
         return
-    for path in game.root.iterdir():
-        if path.name.startswith(_STAGING) and path.is_dir() and not is_link(path):
-            shutil.rmtree(path)
+    report.leftovers += [p.name for p in stale if not _remove(p)]
 
 
 def _refuse_non_folder(game: GameDir, path: Path) -> None:
@@ -240,7 +250,7 @@ def _plan(
 ) -> tuple[list[_Placement], list[tuple[Path, Path, str]]]:
     """Every restore refusal, the switch's included, checked before anything changes."""
     extras = _extras(game, lock)
-    report.extra = [f"{d}/{p.name}" for d, _, p in extras]
+    report.extra = [f"{d}/{n}" for d, n, _ in extras]
     jars = _jar_plan(game, lock, report)
     configs = _config_plan(repo, game, report)
     placed = [
@@ -282,10 +292,10 @@ def _stage(game: GameDir, client: Client, plan: list[_Placement]) -> tuple[Path 
             staged.append(path)
         return staging, staged
     except OSError as error:
-        shutil.rmtree(staging, ignore_errors=True)
+        _remove(staging)
         raise _before_change(error) from error
     except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
+        _remove(staging)
         raise
 
 
@@ -318,10 +328,9 @@ def _apply(
     report.switch = switch(game, profile, running=running, now=now)
     if prune:
         # re-listed after the switch, which renames managed extras like any other jar
-        for folder, _, path in _extras(game, lock):
-            rel = f"{folder}/{path.name}"
-            backup.move(path, rel)
-            report.pruned.append(rel)
+        for folder, name, path in _extras(game, lock):
+            backup.move(path, f"{folder}/{path.name}")
+            report.pruned.append(f"{folder}/{name}")
 
 
 def restore(
@@ -338,11 +347,11 @@ def restore(
     _refuse_while_running(running)
     report = RestoreReport()
     try:
-        _clean_staging(game)
         lock = _read_lock(repo)
         jars, configs = _plan(repo, game, lock, profile, prune, report)
     except OSError as error:
         raise _before_change(error) from error
+    _clean_staging(game, report)
 
     staging, staged = _stage(game, client, jars)
     try:
@@ -361,6 +370,6 @@ def restore(
             raise _before_change(error) from error
         raise RestoreInterrupted(report, error) from error
     finally:
-        if staging is not None:
-            shutil.rmtree(staging, ignore_errors=True)
+        if staging is not None and not _remove(staging):
+            report.leftovers.append(staging.name)
     return report

@@ -6,6 +6,7 @@ import pytest
 
 from helpers import AFTER, PACK_JARS, T0, busy, clock, empty_game, files, idle, make_pack, make_world, names, put
 from minecraft_setup.engine import sync as sync_module
+from minecraft_setup.engine.export import is_config
 from minecraft_setup.engine.gamedir import GameDir
 from minecraft_setup.engine.lock import Lock
 from minecraft_setup.engine.modrinth import HashMismatch
@@ -149,7 +150,7 @@ def test_restore_reports_extra_jars_without_prune(tmp_path, game, modrinth):
     put(target.mods, "45 extra - off.jar.disabled", b"off")
     put(target.root, "resourcepacks/Other.zip", b"other")
     report = run_restore(repo, target, modrinth)
-    assert report.extra == ["mods/30 extra - mine.jar", "mods/45 extra - off.jar.disabled", "resourcepacks/Other.zip"]
+    assert report.extra == ["mods/30 extra - mine.jar", "mods/45 extra - off.jar", "resourcepacks/Other.zip"]
     assert report.pruned == []
     assert (target.mods / "30 extra - mine.jar").is_file()
 
@@ -300,7 +301,8 @@ def test_restore_prunes_only_after_the_guard(tmp_path, modrinth, profile):
     assert report.switch.tagged == ["SoloWorld"]
     assert (target.vault(Profile.SOLO) / "SoloWorld" / ".solo-profile").is_file()
     assert not (target.saves / "SoloWorld").exists()
-    assert report.pruned == ["mods/60 solo.jar.disabled"]
+    assert report.pruned == report.extra == ["mods/60 solo.jar"]
+    assert (report.backup / "mods" / "60 solo.jar.disabled").is_file()
     assert files(target) == (["40 a.jar", "50 b.jar"] if profile is Profile.FULL else ["40 a.jar.disabled", "50 b.jar.disabled"])
     assert detect(list_mods(target)) is profile
 
@@ -372,6 +374,9 @@ def test_sync_config_set_is_spec_exact(tmp_path, game, modrinth):
         "config/modCache.json",
         "config/[cfg]/CACHE.bin",
         "defaultconfigs/cache",
+        "config/Caches/a.json",
+        "config/sub/webcache/b.json",
+        "servers.dat_old",
     ):
         put(game.root, rel, "x")
     repo = tmp_path / "repo"
@@ -412,3 +417,79 @@ def test_sync_does_not_follow_links_in_the_game(tmp_path, game, modrinth):
     repo = tmp_path / "repo"
     sync(game, repo, modrinth, running=idle)
     assert tree(repo / "pack" / "files") == CONFIG_SET
+
+
+@pytest.mark.parametrize(
+    "rel, expected",
+    [
+        ("options.txt", True),
+        ("OPTIONS.TXT", True),
+        ("servers.dat", True),
+        ("CustomSkinLoader/CustomSkinLoader.json", True),
+        ("config/a.json", True),
+        ("defaultconfigs/x/y.toml", True),
+        ("shaderpacks/a.txt", True),
+        ("options.txt/x", False),
+        ("servers.dat/a/b", False),
+        ("CustomSkinLoader/CustomSkinLoader.json/x", False),
+        ("config", False),
+        ("defaultconfigs", False),
+        ("config/Caches/a.json", False),
+        ("config/sub/webCACHE/b.json", False),
+        ("shaderpacks/sub/a.txt", False),
+    ],
+)
+def test_config_set_roots(rel, expected):
+    assert is_config(Path(rel)) is expected
+
+
+def test_sync_refuses_a_file_root_that_is_a_folder(tmp_path, game, modrinth):
+    make_pack(game, modrinth)
+    (game.root / "options.txt").unlink()
+    put(game.root, "options.txt/x", "x")
+    with pytest.raises(GuardError, match="options.txt"):
+        sync(game, tmp_path / "repo", modrinth, running=idle)
+    assert not (tmp_path / "repo").exists()
+
+
+def test_sync_skips_a_folder_root_that_is_a_file(tmp_path, game, modrinth):
+    make_pack(game, modrinth)
+    for path in sorted((game.root / "defaultconfigs").rglob("*"), reverse=True):
+        path.unlink() if path.is_file() else path.rmdir()
+    (game.root / "defaultconfigs").rmdir()
+    put(game.root, "defaultconfigs", "a file")
+    repo = tmp_path / "repo"
+    sync(game, repo, modrinth, running=idle)
+    assert tree(repo / "pack" / "files") == [p for p in CONFIG_SET if not p.startswith("defaultconfigs")]
+
+
+def test_restore_skips_repo_files_below_file_roots(tmp_path, game, modrinth):
+    repo = synced(tmp_path, game, modrinth)
+    (repo / "pack" / "files" / "options.txt").unlink()
+    put(repo, "pack/files/options.txt/x", "planted")
+    report = run_restore(repo, empty_game(tmp_path), modrinth)
+    assert report.skipped == ["options.txt/x"]
+
+
+def test_restore_cleans_stale_staging_only_after_planning(tmp_path, game, modrinth):
+    repo = synced(tmp_path, game, modrinth)
+    target = empty_game(tmp_path)
+    put(target.root, ".restore-abc123/0", b"left by a crash")
+    put(target.root, "options.txt/blocker", "x")
+    with pytest.raises(GuardError):
+        run_restore(repo, target, modrinth)
+    assert staging_dirs(target) == [".restore-abc123"]
+
+
+def test_restore_reports_staging_it_cannot_remove(tmp_path, game, modrinth, monkeypatch):
+    repo = synced(tmp_path, game, modrinth)
+    target = empty_game(tmp_path)
+    put(target.root, ".restore-abc123/0", b"left by a crash")
+
+    def stuck(path, *args, **kwargs):
+        raise PermissionError("in use")
+
+    monkeypatch.setattr(sync_module.shutil, "rmtree", stuck)
+    report = run_restore(repo, target, modrinth)
+    assert ".restore-abc123" in report.leftovers
+    assert detect(list_mods(target)) is Profile.FULL

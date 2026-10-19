@@ -26,7 +26,8 @@ _DENY_FILES = frozenset({"tlauncherprofiles.json", "launcher_profiles.json", "us
 _DENY_DIRS = frozenset({"logs", "crash-reports", "xaero"})
 PACK_DIRS = ("resourcepacks", "shaderpacks")
 # what sync mirrors and restore copies back, besides top-level shaderpacks/*.txt
-_CONFIG_ROOTS = ("config", "defaultconfigs", "options.txt", "servers.dat", "CustomSkinLoader/CustomSkinLoader.json")
+_CONFIG_FILES = ("options.txt", "servers.dat", "CustomSkinLoader/CustomSkinLoader.json")
+_CONFIG_DIRS = ("config", "defaultconfigs")
 
 
 class ExportError(GuardError):
@@ -75,32 +76,36 @@ def walk(root: Path) -> list[Path]:
     return found
 
 
-def _under(rel: Path, root: str) -> bool:
-    parts = [p.lower() for p in Path(root).parts]
-    return [p.lower() for p in rel.parts[: len(parts)]] == parts
+def _lower(path: Path | str) -> list[str]:
+    return [p.lower() for p in Path(path).parts]
 
 
 def is_config(rel: Path) -> bool:
     """Whether a game-relative path belongs to the config set that sync mirrors and restore copies back."""
     if not rel.parts or rel.is_absolute() or ".." in rel.parts or _denied(rel, jars_allowed=False):
         return False
-    if "cache" in rel.name.lower():
+    parts = _lower(rel)
+    if any("cache" in part for part in parts):
         return False
-    if len(rel.parts) == 2 and rel.parts[0].lower() == "shaderpacks" and rel.suffix.lower() == ".txt":
+    if len(parts) == 2 and parts[0] == "shaderpacks" and rel.suffix.lower() == ".txt":
         return True
-    return any(_under(rel, root) for root in _CONFIG_ROOTS)
+    if any(parts == _lower(root) for root in _CONFIG_FILES):
+        return True
+    return any(len(parts) > 1 and parts[0] == root for root in _CONFIG_DIRS)
 
 
 def config_files(game: GameDir) -> list[Path]:
     """The game's config set as regular files; links and junctions are never followed."""
     found = []
-    for root in _CONFIG_ROOTS:
+    for root in _CONFIG_FILES:
         path = game.root / root
-        if is_link(path):
-            continue
-        if path.is_file():
+        if path.is_dir():
+            raise GuardError(f"'{root}' is a folder but should be a file - move it out of the way and retry.")
+        if path.is_file() and not is_link(path):
             found.append(path)
-        elif path.is_dir():
+    for root in _CONFIG_DIRS:
+        path = game.root / root
+        if path.is_dir() and not is_link(path):
             found += walk(path)
     shaders = game.root / "shaderpacks"
     if shaders.is_dir() and not is_link(shaders):
