@@ -94,6 +94,43 @@ def test_lock_load_rejects_unsafe_entries(tmp_path, name, folder):
         Lock.load(path)
 
 
+@pytest.mark.parametrize(
+    "field, value, reason",
+    [
+        ("name", 5, "must be a string"),
+        ("sha512", None, "must be a string"),
+        ("url", 7, "must be a string or null"),
+        ("name", "a<b.jar", "character"),
+        ("name", 'a"b.jar', "character"),
+        ("name", "a?.jar", "character"),
+        ("name", "a\x01.jar", "character"),
+        ("name", "CON.jar", "reserved"),
+        ("name", "con.foo.jar", "reserved"),
+        ("name", "LPT1.jar", "reserved"),
+        ("name", "Com9.jar", "reserved"),
+        ("name", "nul", "reserved"),
+        ("name", "x.jar.", "trailing"),
+        ("name", "x.jar ", "trailing"),
+    ],
+)
+def test_lock_load_rejects_bad_fields(tmp_path, field, value, reason):
+    entry = {"name": "40 a.jar", "dir": "mods", "source": "local", "project_id": None, "version_id": None,
+             "file_name": "a.jar", "url": None, "sha512": "aa"}
+    entry[field] = value
+    path = tmp_path / "lock.json"
+    path.write_text(json.dumps({"game_version": "26.3", "loader": "fabric", "entries": [entry]}))
+    with pytest.raises(ValueError, match=reason):
+        Lock.load(path)
+
+
+def test_lock_load_accepts_device_like_prefixes(tmp_path):
+    entry = {"name": "40 console - a.jar", "dir": "mods", "source": "local", "project_id": None, "version_id": None,
+             "file_name": "a.jar", "url": None, "sha512": "aa"}
+    path = tmp_path / "lock.json"
+    path.write_text(json.dumps({"game_version": "26.3", "loader": "fabric", "entries": [entry, dict(entry, name="COM10.jar")]}))
+    assert len(Lock.load(path).entries) == 2
+
+
 class FakeResponse(io.BytesIO):
     def __enter__(self):
         return self

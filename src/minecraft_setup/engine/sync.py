@@ -10,7 +10,7 @@ from datetime import datetime
 from itertools import count
 from pathlib import Path
 
-from minecraft_setup.engine.export import config_files, is_config
+from minecraft_setup.engine.export import config_files, is_config, is_link, walk
 from minecraft_setup.engine.gamedir import GameDir
 from minecraft_setup.engine.lock import LOCK_FILE, Client, Lock, LockEntry, build_lock, locked_files
 from minecraft_setup.engine.modrinth import HashMismatch, sha512_of
@@ -20,11 +20,13 @@ from minecraft_setup.engine.profiles import (
     GuardError,
     SwitchInterrupted,
     SwitchReport,
+    plan_switch,
     refuse_unavailable,
     switch,
 )
 
 FILES_DIR = Path("pack") / "files"
+_STAGING = ".restore-"
 
 
 @dataclass
@@ -50,7 +52,7 @@ class RestoreReport:
 
     @property
     def changed(self) -> bool:
-        return bool(self.downloaded or self.replaced or self.pruned or self.configs)
+        return bool(self.downloaded or self.replaced or self.pruned or self.configs or self.switch is not None)
 
 
 class RestoreInterrupted(Exception):
@@ -66,17 +68,32 @@ def _refuse_while_running(running: Callable[[], bool]) -> None:
         raise GameRunningError()
 
 
-def _mirror(sources: dict[str, Path], root: Path, report: SyncReport) -> None:
+def _repo_tree(repo: Path) -> list[Path]:
+    """Every entry under pack/files, refusing any link so nothing outside the repo is read or deleted."""
+    root = repo / FILES_DIR
+    for path in (root.parent, root):
+        if is_link(path):
+            raise GuardError(f"'{path}' is a link or junction - replace it with a plain folder and retry.")
+    if not root.is_dir():
+        return []
+    entries = walk(root)
+    links = [p.relative_to(root).as_posix() for p in entries if is_link(p)]
+    if links:
+        raise GuardError(f"'{FILES_DIR.as_posix()}/{links[0]}' is a link or junction - remove it and retry.")
+    return entries
+
+
+def _mirror(sources: dict[str, Path], root: Path, entries: list[Path], report: SyncReport) -> None:
     """Make `root` hold exactly `sources`, removing stale files before copying so case renames land."""
-    if root.is_dir():
-        for path in sorted(root.rglob("*"), key=lambda p: len(p.parts), reverse=True):
-            rel = path.relative_to(root).as_posix()
-            if path.is_dir():
-                if not any(path.iterdir()):
-                    path.rmdir()
-            elif rel not in sources:
-                path.unlink()
-                report.removed.append(rel)
+    # children come after their parents in `entries`, so reversed order empties folders first
+    for path in reversed(entries):
+        rel = path.relative_to(root).as_posix()
+        if path.is_dir():
+            if not any(path.iterdir()):
+                path.rmdir()
+        elif rel not in sources:
+            path.unlink()
+            report.removed.append(rel)
     report.removed.sort()
     for rel, src in sources.items():
         dest = root / rel
@@ -90,12 +107,15 @@ def _mirror(sources: dict[str, Path], root: Path, report: SyncReport) -> None:
 def sync(game: GameDir, repo: Path, client: Client, *, running: Callable[[], bool]) -> SyncReport:
     """Write the lock and mirror the config set into the repo."""
     _refuse_while_running(running)
+    if not game.mods.is_dir():
+        raise GuardError(f"No mods folder in {game.root} - is this the .minecraft folder?")
+    entries = _repo_tree(repo)
     lock = build_lock(game, client)
     sources = {f.relative_to(game.root).as_posix(): f for f in config_files(game)}
     lock.save(repo / LOCK_FILE)
     local = [f"{e.dir}/{e.name}" for e in lock.entries if e.source == "local"]
     report = SyncReport(len(lock.entries), len(sources), local)
-    _mirror(sources, repo / FILES_DIR, report)
+    _mirror(sources, repo / FILES_DIR, entries, report)
     return report
 
 
@@ -140,6 +160,15 @@ def _read_lock(repo: Path) -> Lock:
         return Lock.load(path)
     except (OSError, ValueError) as error:
         raise GuardError(f"Cannot read {path}: {error}") from error
+
+
+def _clean_staging(game: GameDir) -> None:
+    """Remove download folders that an interrupted restore left behind."""
+    if not game.root.is_dir():
+        return
+    for path in game.root.iterdir():
+        if path.name.startswith(_STAGING) and path.is_dir() and not is_link(path):
+            shutil.rmtree(path)
 
 
 def _refuse_non_folder(game: GameDir, path: Path) -> None:
@@ -189,10 +218,8 @@ def _extras(game: GameDir, lock: Lock) -> list[tuple[str, str, Path]]:
 def _config_plan(repo: Path, game: GameDir, report: RestoreReport) -> list[tuple[Path, Path, str]]:
     """(source, destination, relative name) of repo config files that differ from the game's."""
     root = repo / FILES_DIR
-    if not root.is_dir():
-        return []
     plan = []
-    for src in sorted(p for p in root.rglob("*") if p.is_file()):
+    for src in (p for p in _repo_tree(repo) if p.is_file()):
         rel = src.relative_to(root)
         if not is_config(rel):
             report.skipped.append(rel.as_posix())
@@ -204,7 +231,34 @@ def _config_plan(repo: Path, game: GameDir, report: RestoreReport) -> list[tuple
         if dest.is_file() and filecmp.cmp(src, dest, shallow=False):
             continue
         plan.append((src, dest, rel.as_posix()))
+    report.skipped.sort()
     return plan
+
+
+def _plan(
+    repo: Path, game: GameDir, lock: Lock, profile: Profile, prune: bool, report: RestoreReport
+) -> tuple[list[_Placement], list[tuple[Path, Path, str]]]:
+    """Every restore refusal, the switch's included, checked before anything changes."""
+    extras = _extras(game, lock)
+    report.extra = [f"{d}/{p.name}" for d, _, p in extras]
+    jars = _jar_plan(game, lock, report)
+    configs = _config_plan(repo, game, report)
+    placed = [
+        ModFile(p.dest, group_of(p.entry.name), not p.dest.name.lower().endswith(DISABLED))
+        for p in jars
+        if p.entry.dir == "mods" and p.current is None
+    ]
+    # the mods as the final switch will see them: pruning only happens after it
+    projected = list_mods(game) + placed
+    plan_switch(game, profile, projected)
+    if prune:
+        dropped = {n.casefold() for d, n, _ in extras if d == "mods"}
+        refuse_unavailable([m for m in projected if m.name.casefold() not in dropped], profile)
+    return jars, configs
+
+
+def _before_change(error: OSError) -> GuardError:
+    return GuardError(f"Restore failed before changing anything: {error}")
 
 
 def _stage(game: GameDir, client: Client, plan: list[_Placement]) -> tuple[Path | None, list[Path]]:
@@ -213,9 +267,9 @@ def _stage(game: GameDir, client: Client, plan: list[_Placement]) -> tuple[Path 
         return None, []
     try:
         game.root.mkdir(parents=True, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(prefix=".restore-", dir=game.root))
+        staging = Path(tempfile.mkdtemp(prefix=_STAGING, dir=game.root))
     except OSError as error:
-        raise GuardError(f"Cannot create a download folder in {game.root}: {error}") from error
+        raise _before_change(error) from error
     try:
         staged = []
         for n, placement in enumerate(plan):
@@ -227,9 +281,47 @@ def _stage(game: GameDir, client: Client, plan: list[_Placement]) -> tuple[Path 
                 raise HashMismatch(entry.url, entry.sha512, actual)
             staged.append(path)
         return staging, staged
+    except OSError as error:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise _before_change(error) from error
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
+
+
+def _apply(
+    game: GameDir,
+    lock: Lock,
+    profile: Profile,
+    jars: list[_Placement],
+    staged: list[Path],
+    configs: list[tuple[Path, Path, str]],
+    prune: bool,
+    report: RestoreReport,
+    backup: _Backup,
+    running: Callable[[], bool],
+    now: Callable[[], datetime],
+) -> None:
+    for placement, path in zip(jars, staged):
+        if placement.current is not None:
+            backup.move(placement.current, f"{placement.entry.dir}/{placement.current.name}")
+            report.replaced.append(placement.entry.name)
+        placement.dest.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(path, placement.dest)
+        report.downloaded.append(placement.entry.name)
+    for src, dest, rel in configs:
+        if dest.is_file():
+            backup.copy(dest, rel)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dest)
+        report.configs.append(rel)
+    report.switch = switch(game, profile, running=running, now=now)
+    if prune:
+        # re-listed after the switch, which renames managed extras like any other jar
+        for folder, _, path in _extras(game, lock):
+            rel = f"{folder}/{path.name}"
+            backup.move(path, rel)
+            report.pruned.append(rel)
 
 
 def restore(
@@ -244,39 +336,19 @@ def restore(
 ) -> RestoreReport:
     """Rebuild the pack from the repo's lock and config set, ending on `profile` through the guarded switch."""
     _refuse_while_running(running)
-    lock = _read_lock(repo)
     report = RestoreReport()
-    extras = _extras(game, lock)
-    report.extra = [f"{d}/{p.name}" for d, _, p in extras]
-    plan = _jar_plan(game, lock, report)
-    configs = _config_plan(repo, game, report)
-    dropped = {n.casefold() for d, n, _ in extras if d == "mods"} if prune else set()
-    final = {m.name for m in list_mods(game) if m.name.casefold() not in dropped}
-    final |= {p.entry.name for p in plan if p.entry.dir == "mods"}
-    refuse_unavailable([ModFile(Path(n), group_of(n), True) for n in final], profile)
-
-    staging, staged = _stage(game, client, plan)
-    backup = _Backup(game, now(), report)
     try:
-        for placement, path in zip(plan, staged):
-            if placement.current is not None:
-                backup.move(placement.current, f"{placement.entry.dir}/{placement.current.name}")
-                report.replaced.append(placement.entry.name)
-            placement.dest.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(path, placement.dest)
-            report.downloaded.append(placement.entry.name)
-        if prune:
-            for folder, _, path in extras:
-                rel = f"{folder}/{path.name}"
-                backup.move(path, rel)
-                report.pruned.append(rel)
-        for src, dest, rel in configs:
-            if dest.is_file():
-                backup.copy(dest, rel)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, dest)
-            report.configs.append(rel)
-        report.switch = switch(game, profile, running=running, now=now)
+        _clean_staging(game)
+        lock = _read_lock(repo)
+        jars, configs = _plan(repo, game, lock, profile, prune, report)
+    except OSError as error:
+        raise _before_change(error) from error
+
+    staging, staged = _stage(game, client, jars)
+    try:
+        _refuse_while_running(running)
+        backup = _Backup(game, now(), report)
+        _apply(game, lock, profile, jars, staged, configs, prune, report, backup, running, now)
     except SwitchInterrupted as error:
         report.switch = error.report
         raise RestoreInterrupted(report, error) from error
@@ -286,7 +358,7 @@ def restore(
         raise RestoreInterrupted(report, error) from error
     except OSError as error:
         if not report.changed:
-            raise GuardError(f"Restore failed before changing anything: {error}") from error
+            raise _before_change(error) from error
         raise RestoreInterrupted(report, error) from error
     finally:
         if staging is not None:

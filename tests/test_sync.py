@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -214,7 +216,7 @@ def test_restore_skips_files_outside_config_set(tmp_path, game, modrinth):
     assert not (target.mods / "x.jar").exists()
 
 
-def test_restore_failure_after_downloads_reports_progress(tmp_path, game, modrinth):
+def test_restore_refusals_happen_before_any_change(tmp_path, game, modrinth):
     repo = synced(tmp_path, game, modrinth)
     target = empty_game(tmp_path)
     put(target.root, "options.txt/blocker", "a folder where options.txt goes")
@@ -226,13 +228,37 @@ def test_restore_failure_after_downloads_reports_progress(tmp_path, game, modrin
     (target.root / "options.txt").rmdir()
     make_world(target, "W", marker="full")
     make_world(target, "W", marker="full", where=target.vault(Profile.FULL))
-    with pytest.raises(RestoreInterrupted) as stopped:
+    before = tree(target.root)
+    with pytest.raises(GuardError, match="already exists"):
         run_restore(repo, target, modrinth, Profile.VANILLA)
+    assert modrinth.downloads == [] and tree(target.root) == before
+
+    put(target.root, "mods-profile.state.json", "not json")
+    (target.vault(Profile.FULL) / "W" / "level.dat").unlink()
+    with pytest.raises(GuardError, match="since"):
+        run_restore(repo, target, modrinth, Profile.FULL)
+    assert modrinth.downloads == []
+
+
+def test_restore_failure_after_downloads_reports_progress(tmp_path, game, modrinth, monkeypatch):
+    repo = synced(tmp_path, game, modrinth)
+    target = empty_game(tmp_path)
+    real = sync_module.shutil.copyfile
+
+    def failing(src, dest, *args, **kwargs):
+        if Path(dest).name == "servers.dat":
+            raise OSError("disk full")
+        return real(src, dest, *args, **kwargs)
+
+    monkeypatch.setattr(sync_module.shutil, "copyfile", failing)
+    with pytest.raises(RestoreInterrupted) as stopped:
+        run_restore(repo, target, modrinth)
     report = stopped.value.report
     assert sorted(report.downloaded) == sorted([*PACK_JARS, "Fresh.zip", "Comp.zip"])
-    assert "options.txt" in report.configs
+    assert "options.txt" in report.configs and "servers.dat" not in report.configs
     assert report.switch is None
-    assert "some changes were already made" in str(stopped.value) and "already exists" in str(stopped.value)
+    assert "some changes were already made" in str(stopped.value) and "disk full" in str(stopped.value)
+    assert not [p for p in target.root.iterdir() if p.name.startswith(".restore-")]
 
 
 def test_restore_keeps_partial_switch_report(tmp_path, game, modrinth, monkeypatch):
@@ -249,3 +275,140 @@ def test_restore_keeps_partial_switch_report(tmp_path, game, modrinth, monkeypat
     assert stopped.value.report.switch is partial
     assert stopped.value.report.downloaded
     assert "access denied" in str(stopped.value)
+
+
+def solo_target(tmp_path: Path, modrinth) -> tuple[Path, GameDir]:
+    """A repo locking only 4x/5x jars, and a game dir on solo with an untagged world opened since."""
+    src = empty_game(tmp_path / "src")
+    for name, data in {"40 a.jar": b"a", "50 b.jar": b"b"}.items():
+        modrinth.publish(data, name, project=name)
+        put(src.mods, name, data)
+    repo = tmp_path / "repo"
+    sync(src, repo, modrinth, running=idle)
+    target = empty_game(tmp_path / "dst")
+    for name, data in {"40 a.jar": b"a", "50 b.jar": b"b", "60 solo.jar": b"solo"}.items():
+        put(target.mods, name, data)
+    write_since(target, T0)
+    make_world(target, "SoloWorld", opened_at=AFTER)
+    return repo, target
+
+
+@pytest.mark.parametrize("profile", [Profile.FULL, Profile.VANILLA])
+def test_restore_prunes_only_after_the_guard(tmp_path, modrinth, profile):
+    repo, target = solo_target(tmp_path, modrinth)
+    report = run_restore(repo, target, modrinth, profile, prune=True)
+    assert report.switch.tagged == ["SoloWorld"]
+    assert (target.vault(Profile.SOLO) / "SoloWorld" / ".solo-profile").is_file()
+    assert not (target.saves / "SoloWorld").exists()
+    assert report.pruned == ["mods/60 solo.jar.disabled"]
+    assert files(target) == (["40 a.jar", "50 b.jar"] if profile is Profile.FULL else ["40 a.jar.disabled", "50 b.jar.disabled"])
+    assert detect(list_mods(target)) is profile
+
+
+def test_restore_refuses_solo_when_prune_drops_every_6x(tmp_path, modrinth):
+    repo, target = solo_target(tmp_path, modrinth)
+    before = tree(target.root)
+    with pytest.raises(GuardError, match="no solo mods"):
+        run_restore(repo, target, modrinth, Profile.SOLO, prune=True)
+    assert tree(target.root) == before
+
+
+def staging_dirs(game: GameDir) -> list[str]:
+    return [p.name for p in game.root.iterdir() if p.name.startswith(".restore-")]
+
+
+def test_restore_rechecks_running_after_downloads(tmp_path, game, modrinth):
+    repo = synced(tmp_path, game, modrinth)
+    target = empty_game(tmp_path)
+    with pytest.raises(GameRunningError):
+        run_restore(repo, target, modrinth, running=lambda: bool(modrinth.downloads))
+    assert modrinth.downloads
+    assert tree(target.root) == [] and staging_dirs(target) == []
+
+
+def test_restore_os_error_before_changes_is_guard_error(tmp_path, game, modrinth, monkeypatch):
+    repo = synced(tmp_path, game, modrinth)
+    target = empty_game(tmp_path)
+
+    def unreadable(path):
+        raise OSError("read error")
+
+    monkeypatch.setattr(sync_module, "sha512_of", unreadable)
+    with pytest.raises(GuardError, match="failed before changing anything: read error"):
+        run_restore(repo, target, modrinth)
+    assert modrinth.downloads and tree(target.root) == [] and staging_dirs(target) == []
+    put(target.mods, "40 world - terralith.jar", b"terralith")
+    modrinth.downloads.clear()
+    with pytest.raises(GuardError, match="failed before changing anything: read error"):
+        run_restore(repo, target, modrinth)
+    assert modrinth.downloads == []
+
+
+def test_restore_cleans_stale_staging(tmp_path, game, modrinth):
+    repo = synced(tmp_path, game, modrinth)
+    target = empty_game(tmp_path)
+    put(target.root, ".restore-abc123/0", b"left by a crash")
+    run_restore(repo, target, modrinth)
+    assert staging_dirs(target) == []
+
+
+def test_sync_refuses_missing_mods_folder(tmp_path, game, modrinth):
+    game.mods.rmdir()
+    put(game.root, "options.txt", "o")
+    with pytest.raises(GuardError, match="mods"):
+        sync(game, tmp_path / "repo", modrinth, running=idle)
+    assert not (tmp_path / "repo").exists()
+
+
+def test_sync_config_set_is_spec_exact(tmp_path, game, modrinth):
+    make_pack(game, modrinth)
+    for rel in (
+        "resourcepacks/notes.txt",
+        "resourcepacks/[pack] one/pack.mcmeta",
+        "shaderpacks/sub/a.txt",
+        "shaderpacks/Comp.zip.json",
+        "CustomSkinLoader/LocalSkin/skins/me.png",
+        "CustomSkinLoader/ExtraList/x.json",
+        "config/modCache.json",
+        "config/[cfg]/CACHE.bin",
+        "defaultconfigs/cache",
+    ):
+        put(game.root, rel, "x")
+    repo = tmp_path / "repo"
+    sync(game, repo, modrinth, running=idle)
+    assert tree(repo / "pack" / "files") == CONFIG_SET
+    put(repo, "pack/files/resourcepacks/notes.txt", "planted")
+    put(repo, "pack/files/CustomSkinLoader/LocalSkin/skins/me.png", "planted")
+    report = run_restore(repo, empty_game(tmp_path), modrinth)
+    assert report.skipped == ["CustomSkinLoader/LocalSkin/skins/me.png", "resourcepacks/notes.txt"]
+
+
+def junction(link: Path, target: Path) -> None:
+    if sys.platform != "win32":
+        pytest.skip("junctions are Windows only")
+    link.parent.mkdir(parents=True, exist_ok=True)
+    made = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True)
+    if made.returncode != 0 or not link.is_junction():
+        pytest.skip("cannot create a junction here")
+
+
+def test_mirror_refuses_links_and_never_deletes_through_them(tmp_path, game, modrinth):
+    make_pack(game, modrinth)
+    outside = put(tmp_path, "outside/precious.txt", "keep me")
+    repo = tmp_path / "repo"
+    junction(repo / "pack" / "files" / "config" / "link", outside.parent)
+    with pytest.raises(GuardError, match="link"):
+        sync(game, repo, modrinth, running=idle)
+    assert outside.read_text() == "keep me"
+    with pytest.raises(GuardError, match="link"):
+        run_restore(repo, empty_game(tmp_path), modrinth)
+    assert outside.read_text() == "keep me"
+
+
+def test_sync_does_not_follow_links_in_the_game(tmp_path, game, modrinth):
+    make_pack(game, modrinth)
+    outside = put(tmp_path, "outside/secret.json", "{}")
+    junction(game.root / "config" / "linked", outside.parent)
+    repo = tmp_path / "repo"
+    sync(game, repo, modrinth, running=idle)
+    assert tree(repo / "pack" / "files") == CONFIG_SET

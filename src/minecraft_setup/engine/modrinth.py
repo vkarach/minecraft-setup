@@ -90,6 +90,7 @@ class ModrinthClient:
         return {digest: file for digest, file in files.items() if file is not None}
 
     def find_version(self, project: str, version_number: str, loader: str, game_version: str) -> VersionFile | None:
+        """The primary file of that exact version; None when no version matches, ModrinthError for an unknown project."""
         query = urllib.parse.urlencode({"loaders": json.dumps([loader]), "game_versions": json.dumps([game_version])})
         versions = self._json(f"/project/{urllib.parse.quote(project, safe='')}/version?{query}")
         try:

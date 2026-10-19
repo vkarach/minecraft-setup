@@ -25,7 +25,8 @@ _SAVED_ON_EXIT = frozenset({"config", "options", "servers"})
 _DENY_FILES = frozenset({"tlauncherprofiles.json", "launcher_profiles.json", "usercache.json"})
 _DENY_DIRS = frozenset({"logs", "crash-reports", "xaero"})
 PACK_DIRS = ("resourcepacks", "shaderpacks")
-_CONFIG_PARTS = ("config", "resourcepacks", "shaders", "options", "servers", "skins")
+# what sync mirrors and restore copies back, besides top-level shaderpacks/*.txt
+_CONFIG_ROOTS = ("config", "defaultconfigs", "options.txt", "servers.dat", "CustomSkinLoader/CustomSkinLoader.json")
 
 
 class ExportError(GuardError):
@@ -60,6 +61,20 @@ def is_pack(rel: Path) -> bool:
     return len(rel.parts) == 2 and rel.parts[0].lower() in PACK_DIRS and rel.suffix.lower() == ".zip"
 
 
+def is_link(path: Path) -> bool:
+    return path.is_symlink() or path.is_junction()
+
+
+def walk(root: Path) -> list[Path]:
+    """Every entry below `root`, parents before children, never entering links or junctions."""
+    found = []
+    for path in sorted(root.iterdir(), key=lambda p: p.name):
+        found.append(path)
+        if path.is_dir() and not is_link(path):
+            found += walk(path)
+    return found
+
+
 def _under(rel: Path, root: str) -> bool:
     parts = [p.lower() for p in Path(root).parts]
     return [p.lower() for p in rel.parts[: len(parts)]] == parts
@@ -67,15 +82,30 @@ def _under(rel: Path, root: str) -> bool:
 
 def is_config(rel: Path) -> bool:
     """Whether a game-relative path belongs to the config set that sync mirrors and restore copies back."""
-    if rel.is_absolute() or ".." in rel.parts or is_pack(rel) or _denied(rel, jars_allowed=False):
+    if not rel.parts or rel.is_absolute() or ".." in rel.parts or _denied(rel, jars_allowed=False):
         return False
-    return any(_under(rel, root) for part in _CONFIG_PARTS for root in _PATHS[part])
+    if "cache" in rel.name.lower():
+        return False
+    if len(rel.parts) == 2 and rel.parts[0].lower() == "shaderpacks" and rel.suffix.lower() == ".txt":
+        return True
+    return any(_under(rel, root) for root in _CONFIG_ROOTS)
 
 
 def config_files(game: GameDir) -> list[Path]:
-    """The game's config set: every export part except jars, pack archives and the app."""
-    found = (f for part in _CONFIG_PARTS for f in _files(game, part, set()))
-    return [f for f in found if is_config(f.relative_to(game.root))]
+    """The game's config set as regular files; links and junctions are never followed."""
+    found = []
+    for root in _CONFIG_ROOTS:
+        path = game.root / root
+        if is_link(path):
+            continue
+        if path.is_file():
+            found.append(path)
+        elif path.is_dir():
+            found += walk(path)
+    shaders = game.root / "shaderpacks"
+    if shaders.is_dir() and not is_link(shaders):
+        found += sorted(shaders.iterdir(), key=lambda p: p.name)
+    return [f for f in found if f.is_file() and not is_link(f) and is_config(f.relative_to(game.root))]
 
 
 def export(

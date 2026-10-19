@@ -184,16 +184,18 @@ def _find_world(game: GameDir, name: str) -> Path:
     return found[0]
 
 
-def switch(
-    game: GameDir,
-    target: Profile,
-    *,
-    running: Callable[[], bool] = is_minecraft_running,
-    now: Callable[[], datetime] = local_now,
-) -> SwitchReport:
-    """Enable exactly the target's mod groups, guarding worlds against the wrong mods."""
-    _refuse_while_running(running)
-    mods = list_mods(game)
+@dataclass
+class SwitchPlan:
+    same: bool
+    tags: dict[Path, Profile]
+    hides: list[Move]
+    relocations: list[Move]
+    restores: list[Path]
+    renames: list[tuple[ModFile, Path]]
+
+
+def plan_switch(game: GameDir, target: Profile, mods: list[ModFile]) -> SwitchPlan:
+    """Run every switch refusal for `mods` (real or projected) without changing anything."""
     refuse_unavailable(mods, target)
     same = detect(mods) == target
     tags: dict[Path, Profile] = {}
@@ -205,19 +207,31 @@ def switch(
     relocations = _relocate_plan(game, target, tags)
     restores = _restore_plan(game, target, tags)
     _check_moves(game, hides + relocations, restores)
-    renames = _rename_plan(mods, target)
+    return SwitchPlan(same, tags, hides, relocations, restores, _rename_plan(mods, target))
+
+
+def switch(
+    game: GameDir,
+    target: Profile,
+    *,
+    running: Callable[[], bool] = is_minecraft_running,
+    now: Callable[[], datetime] = local_now,
+) -> SwitchReport:
+    """Enable exactly the target's mod groups, guarding worlds against the wrong mods."""
+    _refuse_while_running(running)
+    plan = plan_switch(game, target, list_mods(game))
 
     report = SwitchReport()
     with _mutating(report):
-        _tag(tags, report)
-        _move(hides, report.hidden)
-        for mod, new in renames:
+        _tag(plan.tags, report)
+        _move(plan.hides, report.hidden)
+        for mod, new in plan.renames:
             mod.path.rename(new)
             (report.disabled if mod.enabled else report.enabled).append(mod.name)
         # after the renames, since some of these land in saves
-        _move(relocations, report.relocated)
-        _restore(game, restores, report)
-        if not same:
+        _move(plan.relocations, report.relocated)
+        _restore(game, plan.restores, report)
+        if not plan.same:
             write_since(game, now())
     return report
 

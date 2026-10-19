@@ -18,6 +18,8 @@ LOADER = "fabric"
 LOCK_FILE = Path("pack") / "lock.json"
 LOCKED_DIRS = ("mods", *PACK_DIRS)
 SOURCES = ("modrinth", "local")
+_BAD_CHARS = frozenset('<>:"|?*')
+_RESERVED = frozenset({"CON", "PRN", "AUX", "NUL"} | {f"{port}{n}" for port in ("COM", "LPT") for n in range(1, 10)})
 
 
 class Client(Protocol):
@@ -57,11 +59,14 @@ class Lock:
         data = json.loads(path.read_text(encoding="utf-8"))
         try:
             entries = [LockEntry(**item) for item in data["entries"]]
-            lock = cls(str(data["game_version"]), str(data["loader"]), entries)
-        except (KeyError, TypeError) as error:
+            lock = cls(data["game_version"], data["loader"], entries)
+            for field_name in ("game_version", "loader"):
+                if not isinstance(getattr(lock, field_name), str):
+                    raise ValueError(f"'{field_name}' must be a string")
+            for entry in entries:
+                _validate(entry)
+        except (KeyError, TypeError, AttributeError, ValueError) as error:
             raise ValueError(f"{path.name} is malformed: {error}") from error
-        for entry in entries:
-            _validate(entry)
         return lock
 
     def save(self, path: Path) -> None:
@@ -78,11 +83,33 @@ class Lock:
             raise
 
 
+def _check_types(entry: LockEntry) -> None:
+    for field_name in ("name", "dir", "source", "file_name", "sha512"):
+        if not isinstance(getattr(entry, field_name), str):
+            raise ValueError(f"lock entry field '{field_name}' must be a string")
+    for field_name in ("project_id", "version_id", "url"):
+        if not isinstance(getattr(entry, field_name), (str, type(None))):
+            raise ValueError(f"lock entry field '{field_name}' must be a string or null")
+
+
+def _check_name(name: str) -> None:
+    """Refuse names Windows cannot hold as a plain file in the target folder."""
+    bad = [c for c in name if c in _BAD_CHARS or ord(c) < 32]
+    if bad:
+        raise ValueError(f"lock entry name {name!r} has a forbidden character {bad[0]!r}")
+    if name.split(".")[0].rstrip(" ").upper() in _RESERVED:
+        raise ValueError(f"lock entry name {name!r} is a reserved device name")
+    if name.endswith((".", " ")):
+        raise ValueError(f"lock entry name {name!r} has a trailing dot or space")
+    if name in ("", ".", "..") or "/" in name or "\\" in name or Path(name).name != name:
+        raise ValueError(f"lock entry name {name!r} is not a plain file name")
+
+
 def _validate(entry: LockEntry) -> None:
     """Refuse entries that would write outside their folder or into the wrong one."""
+    _check_types(entry)
     name = entry.name
-    if name in ("", ".", "..") or "/" in name or "\\" in name or Path(name).name != name:
-        raise ValueError(f"Lock entry name {name!r} is not a plain file name.")
+    _check_name(name)
     if entry.dir not in LOCKED_DIRS:
         raise ValueError(f"Lock entry {name!r} has an unknown folder {entry.dir!r}.")
     if entry.source not in SOURCES:
