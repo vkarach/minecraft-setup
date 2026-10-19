@@ -6,14 +6,13 @@ import sysconfig
 import tomllib
 import zipfile
 from collections.abc import Callable
-from datetime import datetime, timezone
 from pathlib import Path
 
 from minecraft_setup.engine.export import PARTS, export
 from minecraft_setup.engine.gamedir import GameDir
 from minecraft_setup.engine.mods import MANAGED, Profile, detect, list_mods
 from minecraft_setup.engine.process import is_minecraft_running
-from minecraft_setup.engine.profiles import GuardError, assign, switch
+from minecraft_setup.engine.profiles import GuardError, SwitchInterrupted, SwitchReport, assign, switch
 from minecraft_setup.engine.worlds import list_worlds
 
 DEFAULT_GAME_DIR = Path(os.environ.get("APPDATA", "~")).expanduser() / ".minecraft"
@@ -36,49 +35,85 @@ def _running() -> bool:
         raise GuardError(f"Cannot tell whether Minecraft is running ({error}) - refusing to continue.") from error
 
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
+def _label(value: Profile | str) -> str:
+    return value.value if isinstance(value, Profile) else value
 
 
 def _show_worlds(game: GameDir) -> None:
     for world in list_worlds(game):
         state = "visible" if world.visible else "hidden "
-        print(f"  {state}  {world.profile.value if world.profile else '-':<8} {world.name}")
+        print(f"  {state}  {_label(world.profile) if world.profile else '-':<8} {world.name}")
+
+
+def _header(game: GameDir) -> Profile | str:
+    mods = list_mods(game)
+    managed = [m for m in mods if m.group in MANAGED]
+    current = detect(mods)
+    print(f"Current profile: {_label(current)} ({sum(m.enabled for m in managed)}/{len(managed)} managed mods enabled)")
+    return current
+
+
+def _world_info(game: GameDir) -> dict[str, tuple[str, str]]:
+    """World name -> (profile marker or '-', folder it sits in), read after the change."""
+    return {w.name: (_label(w.profile) if w.profile else "-", w.path.parent.name) for w in list_worlds(game)}
+
+
+def _print_report(game: GameDir, report: SwitchReport, target: Profile) -> None:
+    info = _world_info(game)
+    for name in report.tagged:
+        print(f"  tag  world '{name}' -> {info.get(name, ('?',))[0]}")
+    for name in report.hidden:
+        print(f"  hid  world '{name}' ({info.get(name, ('?',))[0]})")
+    for name in report.disabled:
+        print(f"  off  {name}")
+    for name in report.enabled:
+        print(f"  on   {name}")
+    for name in report.relocated:
+        print(f"  moved world '{name}' to {info.get(name, ('?', '?'))[1]}")
+    for name in report.restored:
+        print(f"  back world '{name}'")
+    for name in report.kept:
+        print(f"  kept world '{name}' in {game.vault(target).name}: a world with this name exists in saves")
 
 
 def _status(args: argparse.Namespace) -> int:
     game = GameDir(args.game_dir)
-    mods = list_mods(game)
-    managed = [m for m in mods if m.group in MANAGED]
-    current = detect(mods)
-    print(f"Current profile: {current.value if isinstance(current, Profile) else current} ({sum(m.enabled for m in managed)}/{len(managed)} managed mods enabled)")
+    _header(game)
     _show_worlds(game)
     return 0
 
 
 def _profile(args: argparse.Namespace) -> int:
     game = GameDir(args.game_dir)
-    report = switch(game, Profile(args.profile), running=_running, now=_now)
-    for name in report.tagged:
-        print(f"  tag  world '{name}'")
-    for name in report.hidden:
-        print(f"  hid  world '{name}'")
-    for name in report.disabled:
-        print(f"  off  {name}")
-    for name in report.enabled:
-        print(f"  on   {name}")
-    for name in report.restored:
-        print(f"  back world '{name}'")
-    for name in report.kept:
-        print(f"  kept world '{name}': a world with this name exists in saves")
-    print(f"Switched to '{args.profile}'.")
+    target = Profile(args.profile)
+    current = _header(game)
+    try:
+        report = switch(game, target, running=_running)
+    except SwitchInterrupted as error:
+        _print_report(game, error.report, target)
+        print(error)
+        return 1
+    _print_report(game, report, target)
+    print(f"Already on '{target.value}', nothing else to do." if current == target else f"Switched to '{target.value}'.")
     return 0
 
 
 def _assign(args: argparse.Namespace) -> int:
     game = GameDir(args.game_dir)
-    for name in assign(game, Profile(args.profile), args.worlds, running=_running):
-        print(f"  tag  world '{name}' -> {args.profile}")
+    profile = Profile(args.profile)
+    _header(game)
+    owned = {w.name.casefold() for w in list_worlds(game) if w.profile == profile}
+    try:
+        tagged = assign(game, profile, args.worlds, running=_running)
+    except SwitchInterrupted as error:
+        _print_report(game, error.report, profile)
+        print(error)
+        return 1
+    for name in args.worlds:
+        if name.casefold() in owned:
+            print(f"  '{name}' already belongs to {profile.value}")
+    for name in tagged:
+        print(f"  tag  world '{name}' -> {profile.value}")
     _show_worlds(game)
     return 0
 
@@ -112,14 +147,17 @@ def _app_exe(args: argparse.Namespace) -> Path | None:
 
 def _export(args: argparse.Namespace) -> int:
     game = GameDir(args.game_dir)
+    exe = _app_exe(args)
     path = export(
         game,
         set(args.parts) if args.parts else None,
         include_solo=args.solo,
         out_dir=game.root / "exports",
-        app_exe=_app_exe(args),
+        app_exe=exe,
         running=_running,
     )
+    if not args.parts and exe is None:
+        print("App exe not included: dist/minecraft-setup.exe was not found - build it and pass --repo <repo> (or set MINECRAFT_SETUP_REPO).")
     with zipfile.ZipFile(path) as archive:
         count = len(archive.namelist())
     chosen = ", ".join(p for p in PARTS if p in args.parts) if args.parts else "all"

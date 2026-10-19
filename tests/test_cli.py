@@ -7,9 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from helpers import BEFORE, CLIENT, T0, files, make_jar, make_world, pack
+from helpers import AFTER, BEFORE, CLIENT, T0, files, make_jar, make_world, pack
 from minecraft_setup import cli
 from minecraft_setup.engine.mods import Profile, detect, list_mods
+from minecraft_setup.engine.profiles import SwitchInterrupted, SwitchReport
 
 
 @pytest.fixture(autouse=True)
@@ -224,3 +225,84 @@ def test_export_unknown_exe_is_guard_error(game, tmp_path, capsys):
     repo = make_repo(tmp_path / "repo", exe=False)
     assert export_app(game, "--repo", str(repo)) == 1
     assert "app exe" in capsys.readouterr().out
+
+
+def test_profile_wording_header_tag_and_hide(game, capsys):
+    pack(game, Profile.FULL)
+    make_world(game, "W", opened_at=AFTER)
+    assert run(game, "profile", "vanilla") == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "Current profile: full (2/4 managed mods enabled)"
+    assert "  tag  world 'W' -> full" in out
+    assert "  hid  world 'W' (full)" in out
+    assert "  off  40 world - terralith.jar" in out
+    assert out[-1] == "Switched to 'vanilla'."
+
+
+def test_profile_already_on_target(game, capsys):
+    pack(game, Profile.FULL)
+    assert run(game, "profile", "full") == 0
+    out = capsys.readouterr().out
+    assert "Already on 'full', nothing else to do." in out
+    assert "Switched" not in out
+
+
+def test_profile_back_and_kept_lines(game, capsys):
+    pack(game, Profile.FULL)
+    vault = game.vault(Profile.FULL)
+    make_world(game, "R", marker="full", where=vault)
+    make_world(game, "K", marker="full", where=vault)
+    make_world(game, "K", marker="full")
+    assert run(game, "profile", "full") == 0
+    out = capsys.readouterr().out
+    assert "  back world 'R'" in out
+    assert "  kept world 'K' in saves-full-profile: a world with this name exists in saves" in out
+
+
+def test_profile_prints_relocated_worlds(game, capsys):
+    pack(game, Profile.FULL)
+    make_world(game, "X", marker="solo", where=game.vault(Profile.FULL))
+    assert run(game, "profile", "full") == 0
+    assert "  moved world 'X' to saves-solo-profile" in capsys.readouterr().out
+    assert (game.vault(Profile.SOLO) / "X").is_dir()
+
+
+def test_interrupted_switch_reports_progress(game, capsys, monkeypatch):
+    pack(game, Profile.FULL)
+    make_world(game, "A", marker="full", where=game.vault(Profile.FULL))
+    report = SwitchReport(hidden=["A"], disabled=["40 world - terralith.jar"])
+
+    def interrupted(*args, **kwargs):
+        raise SwitchInterrupted(report, OSError("access denied"))
+
+    monkeypatch.setattr(cli, "switch", interrupted)
+    assert run(game, "profile", "vanilla") == 1
+    out = capsys.readouterr().out
+    assert "  hid  world 'A' (full)" in out
+    assert "  off  40 world - terralith.jar" in out
+    assert "Stopped part-way" in out and "access denied" in out
+    assert "Switched" not in out
+
+
+def test_assign_wording(game, capsys):
+    pack(game, Profile.FULL)
+    make_world(game, "W", marker="full")
+    make_world(game, "N", opened_at=BEFORE)
+    assert run(game, "assign", "full", "w", "N") == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "Current profile: full (2/4 managed mods enabled)"
+    assert "  'w' already belongs to full" in out
+    assert "  tag  world 'N' -> full" in out
+
+
+def test_export_all_says_when_app_is_left_out(game, tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("MINECRAFT_SETUP_REPO", raising=False)
+    monkeypatch.setattr(cli, "PACKAGE_ROOT", tmp_path / "nowhere")
+    assert cli.main(["export", "--game-dir", str(game.root)]) == 0
+    out = capsys.readouterr().out
+    assert "App exe not included" in out and "--repo" in out
+    assert cli.main(["export", "--game-dir", str(game.root), "--parts", "mods"]) == 0
+    assert "App exe" not in capsys.readouterr().out
+    repo = make_repo(tmp_path / "repo")
+    assert cli.main(["export", "--game-dir", str(game.root), "--repo", str(repo)]) == 0
+    assert "App exe" not in capsys.readouterr().out
