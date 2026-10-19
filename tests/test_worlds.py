@@ -1,11 +1,13 @@
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
 from helpers import AFTER, BEFORE, CLIENT, FULL, LATER, SOLO, T0, clock, files, fill, idle, make_world, names, pack
+from minecraft_setup.engine import state
 from minecraft_setup.engine.mods import Profile, detect, list_mods
-from minecraft_setup.engine.profiles import GuardError, assign, switch
+from minecraft_setup.engine.profiles import GuardError, SwitchInterrupted, assign, switch
 from minecraft_setup.engine.state import read_since, write_since
 from minecraft_setup.engine.worlds import World, list_worlds
 
@@ -226,3 +228,202 @@ def test_unreadable_state_refuses_before_any_change(game):
         assign(game, Profile.FULL, ["W"], running=idle)
     assert files(game) == before
     assert marks(world) == []
+
+
+def fail_rename_on(monkeypatch, call):
+    original = Path.rename
+    count = 0
+
+    def rename(self, target):
+        nonlocal count
+        count += 1
+        if count == call:
+            raise PermissionError("locked")
+        return original(self, target)
+
+    monkeypatch.setattr(Path, "rename", rename)
+
+
+def test_restore_skips_foreign_worlds_and_relocates_them(game):
+    pack(game, Profile.VANILLA)
+    make_world(game, "Own", marker="full", where=game.vault(Profile.FULL))
+    make_world(game, "Bare", where=game.vault(Profile.FULL))
+    make_world(game, "Stray", marker="solo", where=game.vault(Profile.FULL))
+    make_world(game, "Lost", marker="full", where=game.vault(Profile.VANILLA))
+    make_world(game, "Home", marker="solo", where=game.vault(Profile.SOLO))
+
+    report = switch(game, Profile.FULL, running=idle, now=clock)
+    assert report.enabled == FULL
+    assert report.relocated == ["Lost", "Stray"]
+    assert report.restored == ["Bare", "Own"]
+    assert names(game.saves) == ["Bare", "Lost", "Own"]
+    assert marks(game.saves / "Lost") == [".full-profile"]
+    assert names(game.vault(Profile.FULL)) == []
+    assert names(game.vault(Profile.VANILLA)) == []
+    assert names(game.vault(Profile.SOLO)) == ["Home", "Stray"]
+
+
+def test_relocation_clash_refuses_before_any_change(game):
+    pack(game, Profile.FULL)
+    make_world(game, "W", marker="solo", where=game.vault(Profile.FULL))
+    make_world(game, "W", marker="solo", where=game.vault(Profile.SOLO))
+    make_world(game, "Opened", opened_at=AFTER)
+    before = files(game)
+    with pytest.raises(GuardError, match="already exists"):
+        switch(game, Profile.VANILLA, running=idle, now=clock)
+    assert files(game) == before
+    assert marks(game.saves / "Opened") == []
+    assert names(game.saves) == ["Opened"]
+    assert names(game.vault(Profile.FULL)) == ["W"]
+    assert names(game.vault(Profile.SOLO)) == ["W"]
+    assert read_since(game) == T0
+
+
+def test_relocation_refuses_two_worlds_bound_for_one_vault(game):
+    pack(game, Profile.FULL)
+    make_world(game, "D", marker="solo", where=game.vault(Profile.FULL))
+    make_world(game, "D", marker="solo", where=game.vault(Profile.VANILLA))
+    before = files(game)
+    with pytest.raises(GuardError, match="Two worlds named 'D'"):
+        switch(game, Profile.VANILLA, running=idle, now=clock)
+    assert files(game) == before
+    assert names(game.vault(Profile.FULL)) == ["D"]
+    assert names(game.vault(Profile.VANILLA)) == ["D"]
+    assert names(game.vault(Profile.SOLO)) == []
+
+
+def test_assign_relocates_world_found_in_another_vault(game):
+    pack(game, Profile.FULL)
+    make_world(game, "A", opened_at=BEFORE, where=game.vault(Profile.VANILLA))
+    make_world(game, "B", opened_at=BEFORE, where=game.vault(Profile.SOLO))
+
+    assert assign(game, Profile.SOLO, ["A"], running=idle) == ["A"]
+    assert names(game.vault(Profile.VANILLA)) == []
+    assert names(game.vault(Profile.SOLO)) == ["A", "B"]
+    assert marks(game.vault(Profile.SOLO) / "A") == [".solo-profile"]
+
+    assert assign(game, Profile.FULL, ["B"], running=idle) == ["B"]
+    assert names(game.saves) == ["B"]
+    assert marks(game.saves / "B") == [".full-profile"]
+    assert names(game.vault(Profile.SOLO)) == ["A"]
+
+
+def test_assign_relocation_clash_refuses_before_any_change(game):
+    pack(game, Profile.FULL)
+    make_world(game, "A", opened_at=BEFORE, where=game.vault(Profile.VANILLA))
+    (game.vault(Profile.SOLO) / "A").mkdir(parents=True)
+    with pytest.raises(GuardError, match="already exists"):
+        assign(game, Profile.SOLO, ["A"], running=idle)
+    assert marks(game.vault(Profile.VANILLA) / "A") == []
+    assert names(game.vault(Profile.VANILLA)) == ["A"]
+
+
+def test_assign_matches_names_case_insensitively(game):
+    pack(game, Profile.FULL)
+    make_world(game, "Fresh", opened_at=BEFORE)
+    assert assign(game, Profile.VANILLA, ["fresh"], running=idle) == ["Fresh"]
+    assert names(game.vault(Profile.VANILLA)) == ["Fresh"]
+
+    make_world(game, "W", opened_at=BEFORE)
+    make_world(game, "w", marker="solo", where=game.vault(Profile.SOLO))
+    with pytest.raises(GuardError, match="more than one world"):
+        assign(game, Profile.FULL, ["W"], running=idle)
+    assert marks(game.saves / "W") == []
+
+
+def test_switch_without_state_tags_every_untagged_world(game):
+    fill(game, on=CLIENT + FULL, off=SOLO)
+    make_world(game, "Old", opened_at=BEFORE)
+    make_world(game, "New", opened_at=AFTER)
+    make_world(game, "Tagged", marker="vanilla", opened_at=BEFORE)
+    report = switch(game, Profile.VANILLA, running=idle, now=clock)
+    assert report.tagged == ["New", "Old"]
+    assert report.hidden == ["New", "Old"]
+    assert names(game.saves) == ["Tagged"]
+    assert names(game.vault(Profile.FULL)) == ["New", "Old"]
+    assert marks(game.vault(Profile.FULL) / "Old") == [".full-profile"]
+    assert read_since(game) == LATER
+
+
+def test_file_in_place_of_a_vault_refuses_before_any_change(game):
+    pack(game, Profile.FULL)
+    make_world(game, "F", marker="full", opened_at=BEFORE)
+    make_world(game, "Opened", opened_at=AFTER)
+    game.vault(Profile.FULL).touch()
+    before = files(game)
+    with pytest.raises(GuardError, match="not a folder"):
+        switch(game, Profile.VANILLA, running=idle, now=clock)
+    assert files(game) == before
+    assert names(game.saves) == ["F", "Opened"]
+    assert marks(game.saves / "Opened") == []
+    assert read_since(game) == T0
+
+
+def test_file_in_place_of_saves_refuses_before_any_change(game):
+    pack(game, Profile.VANILLA)
+    make_world(game, "X", marker="full", where=game.vault(Profile.FULL))
+    game.saves.rmdir()
+    game.saves.touch()
+    before = files(game)
+    with pytest.raises(GuardError, match="not a folder"):
+        switch(game, Profile.FULL, running=idle, now=clock)
+    assert files(game) == before
+    assert names(game.vault(Profile.FULL)) == ["X"]
+    assert read_since(game) == T0
+
+
+def test_failure_mid_hide_reports_what_moved(game, monkeypatch):
+    pack(game, Profile.FULL)
+    make_world(game, "A", marker="full", opened_at=BEFORE)
+    make_world(game, "B", marker="full", opened_at=BEFORE)
+    before = files(game)
+    fail_rename_on(monkeypatch, 2)
+    with pytest.raises(SwitchInterrupted) as caught:
+        switch(game, Profile.VANILLA, running=idle, now=clock)
+    monkeypatch.undo()
+    assert not isinstance(caught.value, GuardError)
+    assert isinstance(caught.value.__cause__, PermissionError)
+    assert caught.value.report.hidden == ["A"]
+    assert caught.value.report.disabled == []
+    assert files(game) == before
+    assert names(game.saves) == ["B"]
+    assert names(game.vault(Profile.FULL)) == ["A"]
+    assert read_since(game) == T0
+
+
+def test_assign_failure_reports_what_was_tagged(game, monkeypatch):
+    pack(game, Profile.FULL)
+    make_world(game, "Fresh", opened_at=BEFORE)
+    fail_rename_on(monkeypatch, 1)
+    with pytest.raises(SwitchInterrupted) as caught:
+        assign(game, Profile.VANILLA, ["Fresh"], running=idle)
+    monkeypatch.undo()
+    assert isinstance(caught.value.__cause__, PermissionError)
+    assert caught.value.report.tagged == ["Fresh"]
+    assert caught.value.report.hidden == []
+    assert marks(game.saves / "Fresh") == [".vanilla-profile"]
+
+
+def test_write_since_replaces_the_file_atomically(game, monkeypatch):
+    write_since(game, T0)
+    calls = []
+    original = state.os.replace
+
+    def replace(src, dst):
+        calls.append((Path(src), Path(dst)))
+        return original(src, dst)
+
+    monkeypatch.setattr(state.os, "replace", replace)
+    write_since(game, LATER)
+    assert read_since(game) == LATER
+    assert [(src.parent, dst) for src, dst in calls] == [(game.root, game.state_file)]
+
+    def broken(src, dst):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(state.os, "replace", broken)
+    with pytest.raises(PermissionError):
+        write_since(game, T0)
+    monkeypatch.undo()
+    assert read_since(game) == LATER
+    assert names(game.root) == ["mods", "mods-profile.state.json", "saves"]
