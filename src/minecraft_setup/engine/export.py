@@ -24,6 +24,8 @@ _PATHS = {
 _SAVED_ON_EXIT = frozenset({"config", "options", "servers"})
 _DENY_FILES = frozenset({"tlauncherprofiles.json", "launcher_profiles.json", "usercache.json"})
 _DENY_DIRS = frozenset({"logs", "crash-reports", "xaero"})
+PACK_DIRS = ("resourcepacks", "shaderpacks")
+_CONFIG_PARTS = ("config", "resourcepacks", "shaders", "options", "servers", "skins")
 
 
 class ExportError(GuardError):
@@ -51,6 +53,29 @@ def _files(game: GameDir, part: str, skipped: set[Path]) -> Iterator[Path]:
         for file in found:
             if file not in skipped and not _denied(file.relative_to(game.root), jars_allowed=part == "mods"):
                 yield file
+
+
+def is_pack(rel: Path) -> bool:
+    """A resource or shader pack archive, which the lock describes instead of copying."""
+    return len(rel.parts) == 2 and rel.parts[0].lower() in PACK_DIRS and rel.suffix.lower() == ".zip"
+
+
+def _under(rel: Path, root: str) -> bool:
+    parts = [p.lower() for p in Path(root).parts]
+    return [p.lower() for p in rel.parts[: len(parts)]] == parts
+
+
+def is_config(rel: Path) -> bool:
+    """Whether a game-relative path belongs to the config set that sync mirrors and restore copies back."""
+    if rel.is_absolute() or ".." in rel.parts or is_pack(rel) or _denied(rel, jars_allowed=False):
+        return False
+    return any(_under(rel, root) for part in _CONFIG_PARTS for root in _PATHS[part])
+
+
+def config_files(game: GameDir) -> list[Path]:
+    """The game's config set: every export part except jars, pack archives and the app."""
+    found = (f for part in _CONFIG_PARTS for f in _files(game, part, set()))
+    return [f for f in found if is_config(f.relative_to(game.root))]
 
 
 def export(

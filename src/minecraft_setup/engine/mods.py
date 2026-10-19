@@ -43,6 +43,12 @@ class ModFile:
         return self.group in MANAGED
 
 
+def group_of(name: str) -> int | None:
+    """The jar's group digit from its `NN ` prefix, None when unprefixed."""
+    prefix = _PREFIX.match(name)
+    return int(prefix.group(1)) if prefix else None
+
+
 def _is_jar(name: str) -> bool | None:
     """True for an enabled jar, False for a disabled one, None for anything else."""
     lower = name.lower()
@@ -61,8 +67,7 @@ def list_mods(game: GameDir) -> list[ModFile]:
         enabled = _is_jar(path.name)
         if enabled is None or not path.is_file():
             continue
-        prefix = _PREFIX.match(path.name)
-        mods.append(ModFile(path, int(prefix.group(1)) if prefix else None, enabled))
+        mods.append(ModFile(path, group_of(path.name), enabled))
     return mods
 
 

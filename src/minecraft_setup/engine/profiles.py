@@ -42,7 +42,7 @@ class SwitchInterrupted(Exception):
         self.report = report
 
 
-def _local_now() -> datetime:
+def local_now() -> datetime:
     return datetime.now().astimezone()
 
 
@@ -55,7 +55,7 @@ def _refuse_while_running(running: Callable[[], bool]) -> None:
         raise GameRunningError()
 
 
-def _refuse_unavailable(mods: list[ModFile], profile: Profile) -> None:
+def refuse_unavailable(mods: list[ModFile], profile: Profile) -> None:
     if profile not in available(mods):
         raise GuardError(f"'{profile.value}' is not available: there are no solo mods (6x jars) in mods.")
 
@@ -189,12 +189,12 @@ def switch(
     target: Profile,
     *,
     running: Callable[[], bool] = is_minecraft_running,
-    now: Callable[[], datetime] = _local_now,
+    now: Callable[[], datetime] = local_now,
 ) -> SwitchReport:
     """Enable exactly the target's mod groups, guarding worlds against the wrong mods."""
     _refuse_while_running(running)
     mods = list_mods(game)
-    _refuse_unavailable(mods, target)
+    refuse_unavailable(mods, target)
     same = detect(mods) == target
     tags: dict[Path, Profile] = {}
     if not same:
@@ -228,7 +228,7 @@ def assign(
     """Tag untouched worlds with `profile`, then hide, relocate and restore worlds for the current mods."""
     _refuse_while_running(running)
     mods = list_mods(game)
-    _refuse_unavailable(mods, profile)
+    refuse_unavailable(mods, profile)
     current = detect(mods)
     since = _since(game)
     tags: dict[Path, Profile] = {}

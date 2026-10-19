@@ -1,8 +1,10 @@
+import hashlib
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from minecraft_setup.engine.gamedir import GameDir
+from minecraft_setup.engine.modrinth import HashMismatch, VersionFile
 from minecraft_setup.engine.mods import PROFILE_GROUPS, ModFile, Profile, list_mods
 from minecraft_setup.engine.state import write_since
 
@@ -78,3 +80,81 @@ def files(game: GameDir) -> list[str]:
 
 def names(folder: Path) -> list[str]:
     return sorted(p.name for p in folder.iterdir()) if folder.is_dir() else []
+
+
+def sha512(data: bytes) -> str:
+    return hashlib.sha512(data).hexdigest()
+
+
+def put(root: Path, rel: str, data: bytes | str = b"x") -> Path:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data.encode() if isinstance(data, str) else data)
+    return path
+
+
+class FakeModrinth:
+    """An offline ModrinthClient: serves published files by hash and url."""
+
+    def __init__(self) -> None:
+        self.files: dict[str, VersionFile] = {}
+        self.served: dict[str, bytes] = {}
+        self.versions: dict[tuple[str, str, str, str], VersionFile] = {}
+        self.lookups: list[list[str]] = []
+        self.downloads: list[str] = []
+
+    def publish(self, data: bytes, file_name: str, project: str = "proj", version: str = "1.0") -> VersionFile:
+        digest = sha512(data)
+        found = VersionFile(project, f"{project}-{version}", file_name, f"https://cdn.test/{project}/{file_name}", digest)
+        self.files[digest] = found
+        self.served[found.url] = data
+        self.versions[(project, version, "fabric", "26.3")] = found
+        return found
+
+    def lookup_sha512(self, hashes: list[str]) -> dict[str, VersionFile]:
+        self.lookups.append(list(hashes))
+        return {h: self.files[h] for h in hashes if h in self.files}
+
+    def find_version(self, project: str, version_number: str, loader: str, game_version: str) -> VersionFile | None:
+        return self.versions.get((project, version_number, loader, game_version))
+
+    def download(self, url: str, dest: Path, sha512_hex: str) -> None:
+        self.downloads.append(url)
+        data = self.served[url]
+        if sha512(data) != sha512_hex:
+            raise HashMismatch(url, sha512_hex, sha512(data))
+        dest.write_bytes(data)
+
+
+PACK_JARS = {
+    "01 lib - cloth.jar": b"cloth",
+    "40 world - terralith.jar": b"terralith",
+    "50 mobs - friends.jar": b"friends",
+    "60 rpg - spell engine.jar": b"spell",
+}
+
+
+def make_pack(game: GameDir, modrinth: FakeModrinth) -> None:
+    """A full-profile pack: Modrinth jars, one local jar, packs, configs and a log."""
+    for name, data in PACK_JARS.items():
+        modrinth.publish(data, name.split(" - ")[-1], project=name)
+        put(game.mods, name + (".disabled" if name.startswith("6") else ""), data)
+    put(game.mods, "fabric-api.jar", b"local build")
+    modrinth.publish(b"fresh", "Fresh.zip", project="fresh")
+    put(game.root, "resourcepacks/Fresh.zip", b"fresh")
+    modrinth.publish(b"comp", "Comp.zip", project="comp")
+    put(game.root, "shaderpacks/Comp.zip", b"comp")
+    put(game.root, "shaderpacks/Comp.zip.txt", "shader=on")
+    put(game.root, "config/mod.json", "{}")
+    put(game.root, "config/[cfg]/a.json", "{}")
+    put(game.root, "defaultconfigs/d.toml", "d")
+    put(game.root, "options.txt", "fov:90")
+    put(game.root, "servers.dat", "s")
+    put(game.root, "CustomSkinLoader/CustomSkinLoader.json", "{}")
+    put(game.root, "CustomSkinLoader/CustomSkinLoader.log", "log")
+
+
+def empty_game(tmp_path: Path) -> GameDir:
+    root = tmp_path / "fresh" / ".minecraft"
+    root.mkdir(parents=True)
+    return GameDir(root)

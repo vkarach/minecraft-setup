@@ -7,10 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from helpers import AFTER, BEFORE, CLIENT, T0, files, make_jar, make_world, pack
+from helpers import AFTER, BEFORE, CLIENT, T0, empty_game, files, make_jar, make_pack, make_world, pack, put
 from minecraft_setup import cli
 from minecraft_setup.engine.mods import Profile, detect, list_mods
 from minecraft_setup.engine.profiles import SwitchInterrupted, SwitchReport
+from minecraft_setup.engine.sync import RestoreInterrupted, RestoreReport
 
 
 @pytest.fixture(autouse=True)
@@ -306,3 +307,101 @@ def test_export_all_says_when_app_is_left_out(game, tmp_path, capsys, monkeypatc
     repo = make_repo(tmp_path / "repo")
     assert cli.main(["export", "--game-dir", str(game.root), "--repo", str(repo)]) == 0
     assert "App exe" not in capsys.readouterr().out
+
+
+@pytest.fixture
+def offline(monkeypatch, modrinth):
+    monkeypatch.setattr(cli, "ModrinthClient", lambda: modrinth)
+    return modrinth
+
+
+def cli_sync(game, repo):
+    return cli.main(["sync", "--game-dir", str(game.root), "--repo", str(repo)])
+
+
+def cli_restore(game, repo, profile, *extra):
+    return cli.main(["restore", profile, "--game-dir", str(game.root), "--repo", str(repo), *extra])
+
+
+def test_sync_command(game, tmp_path, offline, capsys):
+    make_pack(game, offline)
+    repo = tmp_path / "repo"
+    assert cli_sync(game, repo) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == f"Locked 7 entries (1 local) -> {repo / 'pack' / 'lock.json'}"
+    assert "  local mods/fabric-api.jar - not on Modrinth, restore cannot download it" in out
+    assert "  copy options.txt" in out
+    assert out[-1] == f"Config set: 7 files in {repo / 'pack' / 'files'} (7 copied, 0 removed)."
+    (game.root / "options.txt").unlink()
+    assert cli_sync(game, repo) == 0
+    assert "  del  options.txt" in capsys.readouterr().out
+
+
+def test_sync_needs_repo(game, tmp_path, offline, capsys, monkeypatch):
+    monkeypatch.delenv("MINECRAFT_SETUP_REPO", raising=False)
+    monkeypatch.setattr(cli, "PACKAGE_ROOT", tmp_path / "nowhere")
+    assert cli.main(["sync", "--game-dir", str(game.root)]) == 1
+    assert "--repo" in capsys.readouterr().out
+    assert cli.main(["restore", "full", "--game-dir", str(game.root)]) == 1
+    assert "--repo" in capsys.readouterr().out
+
+
+def test_sync_blocked_while_running(game, tmp_path, offline, capsys, monkeypatch):
+    make_pack(game, offline)
+    monkeypatch.setattr(cli, "is_minecraft_running", lambda: True)
+    assert cli_sync(game, tmp_path / "repo") == 1
+    assert "Minecraft is running" in capsys.readouterr().out
+    assert not (tmp_path / "repo").exists()
+
+
+def test_restore_command(game, tmp_path, offline, capsys):
+    make_pack(game, offline)
+    repo = tmp_path / "repo"
+    assert cli_sync(game, repo) == 0
+    target = empty_game(tmp_path)
+    put(target.mods, "30 extra - mine.jar", b"mine")
+    capsys.readouterr()
+    assert cli_restore(target, repo, "full") == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "Current profile: vanilla (0/0 managed mods enabled)"
+    assert "  get  40 world - terralith.jar" in out
+    assert "  lost mods/fabric-api.jar - not on Modrinth, not restorable: copy it in by hand" in out
+    assert "  extra mods/30 extra - mine.jar - not in the lock, left alone (--prune moves it to backup)" in out
+    assert "  cfg  options.txt" in out
+    assert "  on   40 world - terralith.jar" in out
+    assert out[-1] == "Restored onto 'full'."
+    assert detect(list_mods(target)) is Profile.FULL
+    assert cli_restore(target, repo, "full", "--prune") == 0
+    out = capsys.readouterr().out
+    assert "  prune mods/30 extra - mine.jar" in out
+    assert "  backup " in out
+
+
+def test_restore_hash_mismatch_exit_1(game, tmp_path, offline, capsys):
+    make_pack(game, offline)
+    repo = tmp_path / "repo"
+    assert cli_sync(game, repo) == 0
+    for url in offline.served:
+        offline.served[url] = b"evil"
+    target = empty_game(tmp_path)
+    capsys.readouterr()
+    assert cli_restore(target, repo, "full") == 1
+    assert "sha512" in capsys.readouterr().out
+    assert not target.mods.exists()
+
+
+def test_restore_interrupted_reports_progress(game, tmp_path, offline, capsys, monkeypatch):
+    partial = RestoreReport(downloaded=["40 world - terralith.jar"], configs=["options.txt"])
+    partial.switch = SwitchReport(hidden=["A"])
+
+    def interrupted(*args, **kwargs):
+        raise RestoreInterrupted(partial, OSError("access denied"))
+
+    monkeypatch.setattr(cli, "restore", interrupted)
+    assert cli_restore(game, tmp_path / "repo", "vanilla") == 1
+    out = capsys.readouterr().out
+    assert "  get  40 world - terralith.jar" in out
+    assert "  cfg  options.txt" in out
+    assert "  hid  world 'A'" in out
+    assert "some changes were already made" in out and "access denied" in out
+    assert "Restored" not in out

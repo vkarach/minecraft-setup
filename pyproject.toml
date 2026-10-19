@@ -26,3 +26,5 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not network'"
+markers = ["network: talks to the live Modrinth API (run with -m network)"]

@@ -10,9 +10,12 @@ from pathlib import Path
 
 from minecraft_setup.engine.export import PARTS, export
 from minecraft_setup.engine.gamedir import GameDir
+from minecraft_setup.engine.lock import LOCK_FILE
+from minecraft_setup.engine.modrinth import ModrinthClient, ModrinthError
 from minecraft_setup.engine.mods import MANAGED, Profile, detect, list_mods
 from minecraft_setup.engine.process import is_minecraft_running
-from minecraft_setup.engine.profiles import GuardError, SwitchInterrupted, SwitchReport, assign, switch
+from minecraft_setup.engine.profiles import GuardError, SwitchInterrupted, SwitchReport, assign, local_now, switch
+from minecraft_setup.engine.sync import FILES_DIR, RestoreInterrupted, RestoreReport, restore, sync
 from minecraft_setup.engine.worlds import list_worlds
 
 DEFAULT_GAME_DIR = Path(os.environ.get("APPDATA", "~")).expanduser() / ".minecraft"
@@ -165,6 +168,70 @@ def _export(args: argparse.Namespace) -> int:
     return 0
 
 
+def _need_repo(args: argparse.Namespace) -> Path:
+    repo = _repo(args)
+    if repo is None:
+        raise GuardError("Cannot find the repo - pass --repo or set MINECRAFT_SETUP_REPO.")
+    return repo
+
+
+def _sync(args: argparse.Namespace) -> int:
+    game = GameDir(args.game_dir)
+    repo = _need_repo(args)
+    report = sync(game, repo, ModrinthClient(), running=_running)
+    print(f"Locked {report.entries} entries ({len(report.local)} local) -> {repo / LOCK_FILE}")
+    for rel in report.local:
+        print(f"  local {rel} - not on Modrinth, restore cannot download it")
+    for rel in report.copied:
+        print(f"  copy {rel}")
+    for rel in report.removed:
+        print(f"  del  {rel}")
+    files = repo / FILES_DIR
+    print(f"Config set: {report.files} files in {files} ({len(report.copied)} copied, {len(report.removed)} removed).")
+    return 0
+
+
+def _print_restore(game: GameDir, report: RestoreReport, target: Profile) -> None:
+    replaced = set(report.replaced)
+    for name in report.downloaded:
+        if name not in replaced:
+            print(f"  get  {name}")
+    for name in report.replaced:
+        print(f"  repl {name} (the old copy is in the backup)")
+    for rel in report.not_restorable:
+        print(f"  lost {rel} - not on Modrinth, not restorable: copy it in by hand")
+    pruned = set(report.pruned)
+    for rel in report.extra:
+        if rel in pruned:
+            print(f"  prune {rel}")
+        else:
+            print(f"  extra {rel} - not in the lock, left alone (--prune moves it to backup)")
+    for rel in report.skipped:
+        print(f"  skip {rel} - not part of the config set")
+    for rel in report.configs:
+        print(f"  cfg  {rel}")
+    if report.backup is not None:
+        print(f"  backup {report.backup}")
+    if report.switch is not None:
+        _print_report(game, report.switch, target)
+
+
+def _restore(args: argparse.Namespace) -> int:
+    game = GameDir(args.game_dir)
+    target = Profile(args.profile)
+    repo = _need_repo(args)
+    _header(game)
+    try:
+        report = restore(repo, game, target, ModrinthClient(), prune=args.prune, running=_running, now=local_now)
+    except RestoreInterrupted as error:
+        _print_restore(game, error.report, target)
+        print(error)
+        return 1
+    _print_restore(game, report, target)
+    print(f"Restored onto '{target.value}'.")
+    return 0
+
+
 def _gui_target() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable)
@@ -231,6 +298,10 @@ def _commands(sub: argparse._SubParsersAction, common: argparse.ArgumentParser) 
     export_parser = add("export", _export, "zip the modpack for a friend (worlds are never included)")
     export_parser.add_argument("--parts", nargs="+", choices=PARTS, help="parts to export (default: all)")
     export_parser.add_argument("--solo", action="store_true", help="include the solo mods (6x)")
+    add("sync", _sync, "write the mod lock and mirror the config set into the repo")
+    restore_parser = add("restore", _restore, "rebuild the pack from the repo, ending on a profile")
+    restore_parser.add_argument("profile", choices=[p.value for p in Profile])
+    restore_parser.add_argument("--prune", action="store_true", help="move jars not in the lock to backup")
     shortcut = add("install-shortcut", _install_shortcut, "add a Start menu shortcut to the GUI")
     shortcut.add_argument(
         "--start-menu",
@@ -250,6 +321,6 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.handler(args)
-    except GuardError as error:
+    except (GuardError, ModrinthError) as error:
         print(error)
         return 1
