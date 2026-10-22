@@ -14,7 +14,7 @@ def _deps(entry: ModEntry, providers: dict[str, list[ModEntry]]) -> list[ModEntr
     return [p for dep in entry.depends for p in providers.get(dep, []) if p is not entry]
 
 
-def _choosable(m: Manifest) -> list[ModEntry]:
+def choosable(m: Manifest) -> list[ModEntry]:
     """Client jars the user can tick; a library something depends on only follows its dependents."""
     providers = _providers(m)
     needed = {p.name for e in m.entries for p in _deps(e, providers)}
@@ -27,14 +27,14 @@ def _jars(m: Manifest) -> list[ModEntry]:
 
 
 def default_choice(m: Manifest) -> frozenset[str]:
-    return frozenset(e.name for e in _choosable(m) if e.default)
+    return frozenset(e.name for e in choosable(m) if e.default)
 
 
 def resolve(m: Manifest, chosen: frozenset[str]) -> frozenset[str]:
     """Entry names to enable: required ones, chosen ones, and everything they depend on."""
     providers = _providers(m)
     by_name = {e.name: e for e in m.entries}
-    start = [e for e in _jars(m) if e.side == "required"] + [e for e in _choosable(m) if e.name in chosen]
+    start = [e for e in _jars(m) if e.side == "required"] + [e for e in choosable(m) if e.name in chosen]
     enabled: set[str] = set()
     todo = list(start)
     while todo:

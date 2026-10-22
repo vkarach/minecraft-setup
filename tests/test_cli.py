@@ -1,24 +1,99 @@
-import os
+import json
 import subprocess
-import sys
-import sysconfig
-from pathlib import Path
 
 import pytest
 
-from helpers import AFTER, BEFORE, CLIENT, files, make_jar, make_world, pack
+from helpers import (
+    AFTER,
+    BEFORE,
+    FakeModrinth,
+    files,
+    make_world,
+    neoforge_install,
+    fabric_install,
+    pack,
+    served_packs,
+)
+from manifests import entry, info, manifest
 from minecraft_setup import cli
 from minecraft_setup.engine.mods import Profile, detect, list_mods
 from minecraft_setup.engine.profiles import SwitchInterrupted, SwitchReport
+from minecraft_setup.engine.selfupdate import RELEASES
+
+A = entry("20 visual - a.jar", data=b"a")
+OFF = entry("30 ui - off.jar", default=False, data=b"off")
+FABRIC = manifest(A, OFF)
+SOLO = manifest(pack=info(id="solo", title="Solo", game_version="1.21.1", loader="neoforge",
+                          loader_version="21.1.264", profiles=False))
+
+
+@pytest.fixture
+def http():
+    return served_packs(FABRIC, SOLO, **{A.url: b"a", OFF.url: b"off"})
 
 
 @pytest.fixture(autouse=True)
-def game_stopped(monkeypatch):
+def wired(game, tmp_path, monkeypatch, http):
+    fabric_install(game.root)
     monkeypatch.setattr(cli, "running_in", lambda game_dir: False)
+    monkeypatch.setattr(cli, "services", lambda: cli.Services(http, FakeModrinth(), tmp_path / "cache", None))
 
 
 def run(game, *args):
-    return cli.main([args[0], "--game-dir", str(game.root), *args[1:]])
+    return cli.main([*args, "--minecraft", str(game.root)])
+
+
+def test_packs_lists_missing_install(game, capsys):
+    assert run(game, "packs") == 0
+    out = capsys.readouterr().out
+    assert "fabric-26.3  Fabric 26.3 -> Fabric 26.3" in out
+    assert "solo  Solo -> not installed: install NeoForge 21.1.264 for Minecraft 1.21.1" in out
+
+
+def test_packs_offline_uses_the_last_copy(game, capsys, http):
+    assert run(game, "packs") == 0
+    http.fail.update(http.served)
+    assert run(game, "packs") == 0
+    out = capsys.readouterr().out
+    assert "Offline" in out and "fabric-26.3" in out
+
+
+def test_update_without_yes_changes_nothing(game, capsys, http):
+    assert run(game, "update", "fabric-26.3") == 0
+    out = capsys.readouterr().out
+    assert f"  add  {A.name}" in out and "--yes" in out
+    assert files(game) == []
+    assert A.url not in http.requests
+    assert run(game, "update", "fabric-26.3", "--yes") == 0
+    assert files(game) == [A.name, OFF.name + ".disabled"]
+
+
+def test_choose_turns_a_mod_on(game, capsys):
+    assert run(game, "update", "fabric-26.3", "--yes") == 0
+    assert run(game, "choose", "fabric-26.3", "--on", OFF.name, "--off", A.name) == 0
+    assert files(game) == [A.name + ".disabled", OFF.name]
+
+
+def test_choose_lists_choices(game, capsys):
+    assert run(game, "choose", "fabric-26.3") == 0
+    out = capsys.readouterr().out
+    assert f"[x] {A.name}" in out and f"[ ] {OFF.name}" in out
+
+
+def test_choose_unknown_name_errors(game, capsys):
+    assert run(game, "choose", "fabric-26.3", "--on", "nope.jar") == 1
+    assert "nope.jar" in capsys.readouterr().out
+
+
+def test_unknown_pack_errors(game, capsys):
+    assert run(game, "update", "nope") == 1
+    assert "nope" in capsys.readouterr().out
+
+
+def test_profile_refused_on_pack_without_profiles(game, capsys):
+    neoforge_install(game.root)
+    assert run(game, "profile", "vanilla", "--pack", "solo") == 1
+    assert "no profiles" in capsys.readouterr().out
 
 
 def test_status_prints_profile_and_worlds(game, capsys):
@@ -75,65 +150,6 @@ def test_assign_tags_worlds(game, capsys):
     assert (world / ".full-profile").is_file()
     assert run(game, "assign", "full", "Missing") == 1
     assert "not found" in capsys.readouterr().out
-
-
-def test_game_dir_from_env(game, capsys, monkeypatch):
-    make_jar(game, CLIENT[0])
-    monkeypatch.setenv("MINECRAFT_DIR", str(game.root))
-    assert cli.main(["status"]) == 0
-    assert "Current profile: vanilla" in capsys.readouterr().out
-
-
-def fake_scripts(tmp_path, monkeypatch, exists=True):
-    scripts = tmp_path / "Scripts"
-    scripts.mkdir()
-    if exists:
-        (scripts / "minecraft-setup-gui.exe").write_bytes(b"MZ")
-    monkeypatch.setattr(sysconfig, "get_path", lambda name: str(scripts))
-    return scripts / "minecraft-setup-gui.exe"
-
-
-def shortcut_props(lnk):
-    read = "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:LNK); $s.TargetPath; $s.WindowStyle"
-    result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-Command", read],
-        capture_output=True,
-        text=True,
-        check=True,
-        env={**os.environ, "LNK": str(lnk)},
-    )
-    return result.stdout.splitlines()
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows shortcuts")
-def test_install_shortcut_creates_lnk(tmp_path, monkeypatch):
-    exe = fake_scripts(tmp_path, monkeypatch)
-    menu = tmp_path / "Programs"
-    assert cli.main(["install-shortcut", "--start-menu", str(menu)]) == 0
-    target, style = shortcut_props(menu / "Minecraft Setup.lnk")
-    assert Path(target) == exe
-    assert style == "1"
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows shortcuts")
-def test_install_shortcut_frozen_targets_running_exe(tmp_path, monkeypatch):
-    fake_scripts(tmp_path, monkeypatch, exists=False)
-    app = tmp_path / "friend" / "minecraft-setup.exe"
-    app.parent.mkdir()
-    app.write_bytes(b"MZ")
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", str(app))
-    menu = tmp_path / "Programs"
-    assert cli.main(["install-shortcut", "--start-menu", str(menu)]) == 0
-    assert Path(shortcut_props(menu / "Minecraft Setup.lnk")[0]) == app
-
-
-def test_install_shortcut_refuses_missing_target(tmp_path, monkeypatch, capsys):
-    fake_scripts(tmp_path, monkeypatch, exists=False)
-    menu = tmp_path / "Programs"
-    assert cli.main(["install-shortcut", "--start-menu", str(menu)]) == 1
-    assert "minecraft-setup-gui.exe" in capsys.readouterr().out
-    assert not menu.exists()
 
 
 def test_profile_wording_header_tag_and_hide(game, capsys):
@@ -202,3 +218,14 @@ def test_assign_wording(game, capsys):
     assert out[0] == "Current profile: full (2/2 managed mods enabled)"
     assert "  'w' already belongs to full" in out
     assert "  tag  world 'N' -> full" in out
+
+
+def test_publish_without_repo_errors(game, capsys):
+    assert run(game, "publish", "fabric-26.3") == 1
+    assert "clone" in capsys.readouterr().out
+
+
+def test_self_update_up_to_date(game, capsys, http):
+    http.served[RELEASES] = json.dumps({"tag_name": "v0.0.1", "assets": []}).encode()
+    assert run(game, "self-update") == 0
+    assert "up to date" in capsys.readouterr().out.lower()

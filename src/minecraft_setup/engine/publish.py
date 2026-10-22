@@ -1,6 +1,8 @@
 import json
 import re
+import shutil
 import subprocess
+import sys
 import zipfile
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -169,6 +171,27 @@ def publish_pack(install: Install, info: PackInfo, repo: Path, client: Client, *
     changed |= _write(pack / "manifest.json", m.dumps().encode("ascii"))
     changed |= _index(repo / "packs", info.id)
     return PublishReport(info.id, len(m.entries), len(m.configs), changed)
+
+
+def _is_clone(folder: Path) -> bool:
+    try:
+        project = (folder / "pyproject.toml").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return (folder / ".git").exists() and 'name = "minecraft-setup"' in project
+
+
+def find_repo(starts: list[Path] | None = None) -> Path | None:
+    """The owner's clone of this repo above any start folder; None without one or without git."""
+    if starts is None:
+        if shutil.which("git") is None:
+            return None
+        starts = [Path.cwd(), Path(sys.executable).parent, Path(__file__).parent]
+    for start in starts:
+        for folder in [start.resolve(), *start.resolve().parents]:
+            if _is_clone(folder):
+                return folder
+    return None
 
 
 def git_publish(repo: Path, pack_id: str, run=subprocess.run) -> bool:

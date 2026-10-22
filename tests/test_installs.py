@@ -1,29 +1,9 @@
 import json
 from pathlib import Path
 
+from helpers import fabric_install as fabric, neoforge_install as neoforge, version
 from manifests import info
 from minecraft_setup.engine.installs import Install, find_installs, find_minecraft, match
-
-
-def version(root: Path, name: str, data: dict, additional: dict | None = None) -> Path:
-    folder = root / "versions" / name
-    folder.mkdir(parents=True)
-    (folder / f"{name}.json").write_text(json.dumps(data), encoding="utf-8")
-    if additional is not None:
-        (folder / "TLauncherAdditional.json").write_text(json.dumps(additional), encoding="utf-8")
-    return folder
-
-
-def fabric(root: Path, name: str = "Fabric 26.3", loader: str = "0.19.5") -> Path:
-    data = {"id": name, "libraries": [{"name": "org.ow2.asm:asm:9.8"}, {"name": f"net.fabricmc:fabric-loader:{loader}"}]}
-    return version(root, name, data, {"jar": "26.3", "source": "local_version_repo"})
-
-
-def neoforge(root: Path, name: str = "Solo") -> Path:
-    # TLauncher wraps every argument as {"values": [...], "rules": [...]}
-    game = [{"values": [v], "rules": []} for v in ("--username", "${auth_player_name}", "--fml.neoForgeVersion", "21.1.264")]
-    data = {"id": name, "arguments": {"game": game}}
-    return version(root, name, data, {"jar": "1.21.1", "modpack": {"name": name}})
 
 
 def test_neoforge_from_plain_string_arguments(tmp_path):

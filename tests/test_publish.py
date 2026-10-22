@@ -10,7 +10,7 @@ from manifests import info
 from minecraft_setup.engine.installs import Install
 from minecraft_setup.engine.manifest import Manifest
 from minecraft_setup.engine.profiles import GameRunningError
-from minecraft_setup.engine.publish import PublishError, build_manifest, git_publish, publish_pack
+from minecraft_setup.engine.publish import PublishError, build_manifest, find_repo, git_publish, publish_pack
 
 SODIUM = "10 perf - sodium.jar"
 IRIS = "11 perf - iris.jar"
@@ -155,3 +155,15 @@ def test_git_publish_nothing_to_commit(tmp_path):
     run = FakeRun(staged=False)
     assert not git_publish(tmp_path, "solo", run=run)
     assert ["git", "push"] not in run.calls
+
+
+def test_find_repo_walks_up_to_the_clone(tmp_path):
+    repo = tmp_path / "minecraft-setup"
+    put(repo, "pyproject.toml", 'name = "minecraft-setup"\n')
+    (repo / ".git").mkdir()
+    (repo / "src" / "pkg").mkdir(parents=True)
+    other = tmp_path / "other"
+    put(other, "pyproject.toml", 'name = "other"\n')
+    (other / ".git").mkdir()
+    assert find_repo([other, repo / "src" / "pkg"]) == repo
+    assert find_repo([other]) is None

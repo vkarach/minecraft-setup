@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-from helpers import FakeHttp
-from manifests import entry, manifest
-from minecraft_setup.engine.remote import RAW, RemoteError, config_url, fetch_index, fetch_manifest
+from helpers import FakeHttp, served_packs
+from manifests import entry, info, manifest
+from minecraft_setup.engine.remote import RAW, RemoteError, config_url, fetch_index, fetch_manifest, load_packs
 
 
 def test_fetch_index():
@@ -43,3 +43,21 @@ def test_missing_pack_raises_remote_error():
 
 def test_config_url_quotes_spaces_and_brackets():
     assert config_url("solo", "config/[cfg] a/b c.json") == f"{RAW}/packs/solo/files/config/%5Bcfg%5D%20a/b%20c.json"
+
+
+def test_load_packs_caches_and_falls_back(tmp_path):
+    fabric, solo = manifest(), manifest(pack=info(id="solo", profiles=False))
+    assert load_packs(served_packs(fabric, solo), tmp_path) == ([fabric, solo], False)
+    assert load_packs(FakeHttp({}), tmp_path) == ([fabric, solo], True)
+
+
+def test_load_packs_forgets_unpublished_pack(tmp_path):
+    fabric, solo = manifest(), manifest(pack=info(id="solo", profiles=False))
+    load_packs(served_packs(fabric, solo), tmp_path)
+    load_packs(served_packs(fabric), tmp_path)
+    assert load_packs(FakeHttp({}), tmp_path) == ([fabric], True)
+
+
+def test_load_packs_offline_without_cache_raises(tmp_path):
+    with pytest.raises(RemoteError):
+        load_packs(FakeHttp({}), tmp_path)
