@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from minecraft_setup.engine.gamedir import GameDir
-from minecraft_setup.engine.mods import DISABLED, PROFILE_GROUPS, ModFile, Profile, available, detect, leaving, list_mods
+from minecraft_setup.engine.mods import DISABLED, PROFILE_GROUPS, ModFile, Profile, detect, leaving, list_mods
 from minecraft_setup.engine.process import is_minecraft_running
 from minecraft_setup.engine.state import read_since, write_since
 from minecraft_setup.engine.worlds import marker, opened_since, tag, world_dirs, world_profile
@@ -53,11 +53,6 @@ def _label(profile: Profile | Literal["mixed"]) -> str:
 def _refuse_while_running(running: Callable[[], bool]) -> None:
     if running():
         raise GameRunningError()
-
-
-def refuse_unavailable(mods: list[ModFile], profile: Profile) -> None:
-    if profile not in available(mods):
-        raise GuardError(f"'{profile.value}' is not available: there are no solo mods (6x jars) in mods.")
 
 
 def _refuse_non_folder(path: Path) -> None:
@@ -196,7 +191,6 @@ class SwitchPlan:
 
 def plan_switch(game: GameDir, target: Profile, mods: list[ModFile]) -> SwitchPlan:
     """Run every switch refusal for `mods` (real or projected) without changing anything."""
-    refuse_unavailable(mods, target)
     same = detect(mods) == target
     tags: dict[Path, Profile] = {}
     if not same:
@@ -241,9 +235,7 @@ def assign(
 ) -> list[str]:
     """Tag untouched worlds with `profile`, then hide, relocate and restore worlds for the current mods."""
     _refuse_while_running(running)
-    mods = list_mods(game)
-    refuse_unavailable(mods, profile)
-    current = detect(mods)
+    current = detect(list_mods(game))
     since = _since(game)
     tags: dict[Path, Profile] = {}
     for name in names:

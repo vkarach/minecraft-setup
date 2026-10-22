@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import AFTER, BEFORE, CLIENT, FULL, LATER, SOLO, T0, clock, files, fill, idle, make_world, names, pack
+from helpers import AFTER, BEFORE, CLIENT, FULL, LATER, T0, clock, files, fill, idle, make_world, names, pack
 from minecraft_setup.engine import state
 from minecraft_setup.engine.mods import Profile, detect, list_mods
 from minecraft_setup.engine.profiles import GuardError, SwitchInterrupted, assign, switch
@@ -30,39 +30,36 @@ def test_untagged_opened_world_tagged_with_leaving_profile(game):
     assert marks(game.vault(Profile.FULL) / "New") == [".full-profile"]
 
 
-def test_mixed_with_6x_tags_solo(game):
+def test_mixed_tags_full(game):
     write_since(game, T0)
-    fill(game, on=CLIENT + FULL[:1] + SOLO[:1], off=FULL[1:] + SOLO[1:])
+    fill(game, on=CLIENT + FULL[:1], off=FULL[1:])
     make_world(game, "Mixed", opened_at=AFTER)
-    report = switch(game, Profile.FULL, running=idle, now=clock)
+    report = switch(game, Profile.VANILLA, running=idle, now=clock)
     assert report.tagged == ["Mixed"]
-    assert names(game.vault(Profile.SOLO)) == ["Mixed"]
-    assert marks(game.vault(Profile.SOLO) / "Mixed") == [".solo-profile"]
-    assert detect(list_mods(game)) is Profile.FULL
+    assert names(game.vault(Profile.FULL)) == ["Mixed"]
+    assert marks(game.vault(Profile.FULL) / "Mixed") == [".full-profile"]
+    assert detect(list_mods(game)) is Profile.VANILLA
 
 
 def test_foreign_world_hidden_and_restored(game):
     pack(game, Profile.FULL)
     make_world(game, "F", marker="full", opened_at=BEFORE)
     make_world(game, "V", marker="vanilla", opened_at=BEFORE)
-    make_world(game, "S", marker="solo", opened_at=BEFORE)
 
     report = switch(game, Profile.VANILLA, running=idle, now=clock)
-    assert report.hidden == ["F", "S"]
+    assert report.hidden == ["F"]
     assert report.restored == []
     assert names(game.saves) == ["V"]
     assert names(game.vault(Profile.FULL)) == ["F"]
-    assert names(game.vault(Profile.SOLO)) == ["S"]
 
-    report = switch(game, Profile.SOLO, running=idle, now=lambda: LATER + timedelta(days=1))
+    report = switch(game, Profile.FULL, running=idle, now=lambda: LATER + timedelta(days=1))
     assert report.hidden == ["V"]
-    assert report.restored == ["S"]
+    assert report.restored == ["F"]
     assert report.tagged == []
-    assert names(game.saves) == ["S"]
+    assert names(game.saves) == ["F"]
     assert names(game.vault(Profile.VANILLA)) == ["V"]
-    assert names(game.vault(Profile.FULL)) == ["F"]
-    assert names(game.vault(Profile.SOLO)) == []
-    assert (game.saves / "S" / "level.dat").is_file()
+    assert names(game.vault(Profile.FULL)) == []
+    assert (game.saves / "F" / "level.dat").is_file()
 
 
 def test_hide_refuses_on_vault_name_clash(game):
@@ -110,11 +107,11 @@ def test_assign_rules(game):
     pack(game, Profile.FULL)
     make_world(game, "Fresh", opened_at=BEFORE)
     make_world(game, "Opened", opened_at=AFTER)
-    make_world(game, "Solo", marker="solo", where=game.vault(Profile.SOLO))
+    make_world(game, "Full", marker="full", where=game.vault(Profile.FULL))
     make_world(game, "Vanilla", marker="vanilla", where=game.vault(Profile.VANILLA))
 
-    with pytest.raises(GuardError, match="belongs to 'solo'"):
-        assign(game, Profile.FULL, ["Solo"], running=idle)
+    with pytest.raises(GuardError, match="belongs to 'full'"):
+        assign(game, Profile.VANILLA, ["Full"], running=idle)
     with pytest.raises(GuardError, match="was opened on 'full'"):
         assign(game, Profile.VANILLA, ["Fresh", "Opened"], running=idle)
     with pytest.raises(GuardError, match="not found"):
@@ -123,18 +120,18 @@ def test_assign_rules(game):
     assert marks(game.saves / "Opened") == []
 
     assert assign(game, Profile.VANILLA, ["Fresh", "Vanilla"], running=idle) == ["Fresh"]
-    assert names(game.saves) == ["Opened"]
+    assert names(game.saves) == ["Full", "Opened"]
     assert names(game.vault(Profile.VANILLA)) == ["Fresh", "Vanilla"]
     assert marks(game.vault(Profile.VANILLA) / "Fresh") == [".vanilla-profile"]
 
     assert assign(game, Profile.FULL, ["Opened"], running=idle) == ["Opened"]
-    assert names(game.saves) == ["Opened"]
+    assert names(game.saves) == ["Full", "Opened"]
     assert marks(game.saves / "Opened") == [".full-profile"]
 
 
 def test_assign_on_mixed_hides_every_tagged_world(game):
     write_since(game, T0)
-    fill(game, on=CLIENT + FULL[:1], off=FULL[1:] + SOLO)
+    fill(game, on=CLIENT + FULL[:1], off=FULL[1:])
     make_world(game, "A", opened_at=BEFORE)
     make_world(game, "Back", marker="full", where=game.vault(Profile.FULL))
     assert assign(game, Profile.FULL, ["A"], running=idle) == ["A"]
@@ -146,24 +143,24 @@ def test_bracket_names(game):
     pack(game, Profile.FULL)
     make_world(game, "World [1]", marker="full", opened_at=BEFORE)
     make_world(game, "New [a-z]", opened_at=AFTER)
-    make_world(game, "Solo [2]", marker="solo", where=game.vault(Profile.SOLO))
+    make_world(game, "Van [2]", marker="vanilla", where=game.vault(Profile.VANILLA))
 
-    report = switch(game, Profile.SOLO, running=idle, now=clock)
-    assert files(game) == sorted(CLIENT + FULL + SOLO)
-    assert report.enabled == SOLO
+    report = switch(game, Profile.VANILLA, running=idle, now=clock)
+    assert files(game) == sorted(CLIENT + [n + ".disabled" for n in FULL])
+    assert report.disabled == FULL
     assert report.tagged == ["New [a-z]"]
     assert report.hidden == ["New [a-z]", "World [1]"]
-    assert report.restored == ["Solo [2]"]
-    assert names(game.saves) == ["Solo [2]"]
+    assert report.restored == ["Van [2]"]
+    assert names(game.saves) == ["Van [2]"]
 
     report = switch(game, Profile.FULL, running=idle, now=lambda: LATER + timedelta(days=1))
-    assert report.disabled == SOLO
+    assert report.enabled == FULL
     assert report.restored == ["New [a-z]", "World [1]"]
-    assert names(game.vault(Profile.SOLO)) == ["Solo [2]"]
+    assert names(game.vault(Profile.VANILLA)) == ["Van [2]"]
 
     make_world(game, "Plain [x]", opened_at=BEFORE)
     assert assign(game, Profile.VANILLA, ["Plain [x]"], running=idle) == ["Plain [x]"]
-    assert names(game.vault(Profile.VANILLA)) == ["Plain [x]"]
+    assert names(game.vault(Profile.VANILLA)) == ["Plain [x]", "Van [2]"]
 
 
 def test_legacy_state_and_markers(game):
@@ -248,9 +245,9 @@ def test_restore_skips_foreign_worlds_and_relocates_them(game):
     pack(game, Profile.VANILLA)
     make_world(game, "Own", marker="full", where=game.vault(Profile.FULL))
     make_world(game, "Bare", where=game.vault(Profile.FULL))
-    make_world(game, "Stray", marker="solo", where=game.vault(Profile.FULL))
+    make_world(game, "Stray", marker="vanilla", where=game.vault(Profile.FULL))
     make_world(game, "Lost", marker="full", where=game.vault(Profile.VANILLA))
-    make_world(game, "Home", marker="solo", where=game.vault(Profile.SOLO))
+    make_world(game, "Home", marker="vanilla", where=game.vault(Profile.VANILLA))
 
     report = switch(game, Profile.FULL, running=idle, now=clock)
     assert report.enabled == FULL
@@ -259,63 +256,62 @@ def test_restore_skips_foreign_worlds_and_relocates_them(game):
     assert names(game.saves) == ["Bare", "Lost", "Own"]
     assert marks(game.saves / "Lost") == [".full-profile"]
     assert names(game.vault(Profile.FULL)) == []
-    assert names(game.vault(Profile.VANILLA)) == []
-    assert names(game.vault(Profile.SOLO)) == ["Home", "Stray"]
+    assert names(game.vault(Profile.VANILLA)) == ["Home", "Stray"]
 
 
 def test_relocation_clash_refuses_before_any_change(game):
-    pack(game, Profile.FULL)
-    make_world(game, "W", marker="solo", where=game.vault(Profile.FULL))
-    make_world(game, "W", marker="solo", where=game.vault(Profile.SOLO))
+    pack(game, Profile.VANILLA)
+    make_world(game, "W", marker="vanilla", where=game.vault(Profile.FULL))
+    make_world(game, "W", marker="vanilla", where=game.vault(Profile.VANILLA))
     make_world(game, "Opened", opened_at=AFTER)
     before = files(game)
     with pytest.raises(GuardError, match="already exists"):
-        switch(game, Profile.VANILLA, running=idle, now=clock)
+        switch(game, Profile.FULL, running=idle, now=clock)
     assert files(game) == before
     assert marks(game.saves / "Opened") == []
     assert names(game.saves) == ["Opened"]
     assert names(game.vault(Profile.FULL)) == ["W"]
-    assert names(game.vault(Profile.SOLO)) == ["W"]
+    assert names(game.vault(Profile.VANILLA)) == ["W"]
     assert read_since(game) == T0
 
 
 def test_relocation_refuses_two_worlds_bound_for_one_vault(game):
     pack(game, Profile.FULL)
-    make_world(game, "D", marker="solo", where=game.vault(Profile.FULL))
-    make_world(game, "D", marker="solo", where=game.vault(Profile.VANILLA))
+    make_world(game, "D", marker="full", opened_at=BEFORE)
+    make_world(game, "D", marker="full", where=game.vault(Profile.VANILLA))
     before = files(game)
     with pytest.raises(GuardError, match="Two worlds named 'D'"):
         switch(game, Profile.VANILLA, running=idle, now=clock)
     assert files(game) == before
-    assert names(game.vault(Profile.FULL)) == ["D"]
+    assert names(game.saves) == ["D"]
     assert names(game.vault(Profile.VANILLA)) == ["D"]
-    assert names(game.vault(Profile.SOLO)) == []
+    assert names(game.vault(Profile.FULL)) == []
 
 
 def test_assign_relocates_world_found_in_another_vault(game):
     pack(game, Profile.FULL)
-    make_world(game, "A", opened_at=BEFORE, where=game.vault(Profile.VANILLA))
-    make_world(game, "B", opened_at=BEFORE, where=game.vault(Profile.SOLO))
+    make_world(game, "A", opened_at=BEFORE, where=game.vault(Profile.FULL))
+    make_world(game, "B", opened_at=BEFORE, where=game.vault(Profile.VANILLA))
 
-    assert assign(game, Profile.SOLO, ["A"], running=idle) == ["A"]
-    assert names(game.vault(Profile.VANILLA)) == []
-    assert names(game.vault(Profile.SOLO)) == ["A", "B"]
-    assert marks(game.vault(Profile.SOLO) / "A") == [".solo-profile"]
+    assert assign(game, Profile.VANILLA, ["A"], running=idle) == ["A"]
+    assert names(game.vault(Profile.FULL)) == []
+    assert names(game.vault(Profile.VANILLA)) == ["A", "B"]
+    assert marks(game.vault(Profile.VANILLA) / "A") == [".vanilla-profile"]
 
     assert assign(game, Profile.FULL, ["B"], running=idle) == ["B"]
     assert names(game.saves) == ["B"]
     assert marks(game.saves / "B") == [".full-profile"]
-    assert names(game.vault(Profile.SOLO)) == ["A"]
+    assert names(game.vault(Profile.VANILLA)) == ["A"]
 
 
 def test_assign_relocation_clash_refuses_before_any_change(game):
     pack(game, Profile.FULL)
-    make_world(game, "A", opened_at=BEFORE, where=game.vault(Profile.VANILLA))
-    (game.vault(Profile.SOLO) / "A").mkdir(parents=True)
+    make_world(game, "A", opened_at=BEFORE, where=game.vault(Profile.FULL))
+    (game.vault(Profile.VANILLA) / "A").mkdir(parents=True)
     with pytest.raises(GuardError, match="already exists"):
-        assign(game, Profile.SOLO, ["A"], running=idle)
-    assert marks(game.vault(Profile.VANILLA) / "A") == []
-    assert names(game.vault(Profile.VANILLA)) == ["A"]
+        assign(game, Profile.VANILLA, ["A"], running=idle)
+    assert marks(game.vault(Profile.FULL) / "A") == []
+    assert names(game.vault(Profile.FULL)) == ["A"]
 
 
 def test_assign_matches_names_case_insensitively(game):
@@ -325,14 +321,14 @@ def test_assign_matches_names_case_insensitively(game):
     assert names(game.vault(Profile.VANILLA)) == ["Fresh"]
 
     make_world(game, "W", opened_at=BEFORE)
-    make_world(game, "w", marker="solo", where=game.vault(Profile.SOLO))
+    make_world(game, "w", marker="full", where=game.vault(Profile.FULL))
     with pytest.raises(GuardError, match="more than one world"):
         assign(game, Profile.FULL, ["W"], running=idle)
     assert marks(game.saves / "W") == []
 
 
 def test_switch_without_state_tags_every_untagged_world(game):
-    fill(game, on=CLIENT + FULL, off=SOLO)
+    fill(game, on=CLIENT + FULL)
     make_world(game, "Old", opened_at=BEFORE)
     make_world(game, "New", opened_at=AFTER)
     make_world(game, "Tagged", marker="vanilla", opened_at=BEFORE)

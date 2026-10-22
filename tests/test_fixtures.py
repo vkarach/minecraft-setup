@@ -19,9 +19,9 @@ def test_make_jar_enabled_and_disabled(game):
 
 def test_make_world_with_marker_and_mtime(game):
     when = datetime(2026, 1, 2, 3, 4, 5)
-    world = make_world(game, "W [1]", marker="solo", opened_at=when)
+    world = make_world(game, "W [1]", marker="full", opened_at=when)
     assert (world / "level.dat").is_file()
-    assert (world / ".solo-profile").is_file()
+    assert (world / ".full-profile").is_file()
     assert datetime.fromtimestamp((world / "level.dat").stat().st_mtime) == when
 
 

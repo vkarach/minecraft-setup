@@ -15,7 +15,6 @@ LATER = T0 + timedelta(days=1)
 
 CLIENT = ["01 lib - cloth.jar", "fabric-api.jar"]
 FULL = ["40 world - terralith.jar", "50 mobs - friends.jar"]
-SOLO = ["60 rpg - spell engine.jar", "61 rpg [needs tl-skins-off] - wizards.jar"]
 
 
 def make_jar(game: GameDir, name: str, enabled: bool = True) -> Path:
@@ -65,11 +64,10 @@ def fill(game: GameDir, on=(), off=()) -> list[ModFile]:
     return list_mods(game)
 
 
-def pack(game: GameDir, profile: Profile, solo: bool = True) -> list[ModFile]:
-    """Install CLIENT, FULL and optionally SOLO jars switched to `profile`, with `since` at T0."""
-    managed = FULL + (SOLO if solo else [])
-    on = [n for n in managed if int(n[0]) in PROFILE_GROUPS[profile]]
-    off = [n for n in managed if n not in on]
+def pack(game: GameDir, profile: Profile) -> list[ModFile]:
+    """Install CLIENT and FULL jars switched to `profile`, with `since` at T0."""
+    on = [n for n in FULL if int(n[0]) in PROFILE_GROUPS[profile]]
+    off = [n for n in FULL if n not in on]
     write_since(game, T0)
     return fill(game, on=CLIENT + on, off=off)
 
@@ -124,37 +122,3 @@ class FakeModrinth:
         if sha512(data) != sha512_hex:
             raise HashMismatch(url, sha512_hex, sha512(data))
         dest.write_bytes(data)
-
-
-PACK_JARS = {
-    "01 lib - cloth.jar": b"cloth",
-    "40 world - terralith.jar": b"terralith",
-    "50 mobs - friends.jar": b"friends",
-    "60 rpg - spell engine.jar": b"spell",
-}
-
-
-def make_pack(game: GameDir, modrinth: FakeModrinth) -> None:
-    """A full-profile pack: Modrinth jars, one local jar, packs, configs and a log."""
-    for name, data in PACK_JARS.items():
-        modrinth.publish(data, name.split(" - ")[-1], project=name)
-        put(game.mods, name + (".disabled" if name.startswith("6") else ""), data)
-    put(game.mods, "fabric-api.jar", b"local build")
-    modrinth.publish(b"fresh", "Fresh.zip", project="fresh")
-    put(game.root, "resourcepacks/Fresh.zip", b"fresh")
-    modrinth.publish(b"comp", "Comp.zip", project="comp")
-    put(game.root, "shaderpacks/Comp.zip", b"comp")
-    put(game.root, "shaderpacks/Comp.zip.txt", "shader=on")
-    put(game.root, "config/mod.json", "{}")
-    put(game.root, "config/[cfg]/a.json", "{}")
-    put(game.root, "defaultconfigs/d.toml", "d")
-    put(game.root, "options.txt", "fov:90")
-    put(game.root, "servers.dat", "s")
-    put(game.root, "CustomSkinLoader/CustomSkinLoader.json", "{}")
-    put(game.root, "CustomSkinLoader/CustomSkinLoader.log", "log")
-
-
-def empty_game(tmp_path: Path) -> GameDir:
-    root = tmp_path / "fresh" / ".minecraft"
-    root.mkdir(parents=True)
-    return GameDir(root)

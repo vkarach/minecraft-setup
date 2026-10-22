@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
-from minecraft_setup.engine.export import PACK_DIRS, is_pack
+from minecraft_setup.engine.files import PACK_DIRS, is_pack
 from minecraft_setup.engine.gamedir import GameDir
 from minecraft_setup.engine.modrinth import VersionFile, sha512_of
 from minecraft_setup.engine.mods import DISABLED, list_mods

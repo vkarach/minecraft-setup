@@ -15,16 +15,13 @@ class Profile(Enum):
 
     VANILLA = "vanilla"
     FULL = "full"
-    SOLO = "solo"
 
 
 PROFILE_GROUPS: dict[Profile, frozenset[int]] = {
     Profile.VANILLA: frozenset(),
     Profile.FULL: frozenset({4, 5}),
-    Profile.SOLO: frozenset({4, 5, 6}),
 }
 MANAGED: frozenset[int] = frozenset().union(*PROFILE_GROUPS.values())
-SOLO_GROUPS = PROFILE_GROUPS[Profile.SOLO] - PROFILE_GROUPS[Profile.FULL]
 
 
 @dataclass(frozen=True)
@@ -77,16 +74,11 @@ def _matches(mods: list[ModFile], profile: Profile) -> bool:
 
 
 def detect(mods: list[ModFile]) -> Profile | Literal["mixed"]:
-    # first match wins, so a pack without 6x jars reads as full rather than solo
+    # first match wins, so a pack without managed jars reads as vanilla
     for profile in Profile:
         if _matches(mods, profile):
             return profile
     return "mixed"
-
-
-def available(mods: list[ModFile]) -> list[Profile]:
-    has_solo = any(m.group in SOLO_GROUPS for m in mods)
-    return [p for p in Profile if p is not Profile.SOLO or has_solo]
 
 
 def leaving(mods: list[ModFile]) -> Profile:
