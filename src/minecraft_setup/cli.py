@@ -1,5 +1,4 @@
 import argparse
-import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -10,19 +9,16 @@ from minecraft_setup.engine import selfupdate
 from minecraft_setup.engine.apply import InstallState, UpdateInterrupted, UpdatePlan, apply_update, plan_update
 from minecraft_setup.engine.gamedir import GameDir
 from minecraft_setup.engine.http import Http, HttpError, UrllibHttp
-from minecraft_setup.engine.installs import Install, find_installs, find_minecraft, match
+from minecraft_setup.engine.installs import Install, find_installs, find_minecraft, match, needs
 from minecraft_setup.engine.manifest import Manifest, PackInfo
 from minecraft_setup.engine.modrinth import ModrinthClient
 from minecraft_setup.engine.mods import MANAGED, Profile, detect, list_mods
-from minecraft_setup.engine.process import running_in
+from minecraft_setup.engine.process import running_check, running_in
 from minecraft_setup.engine.profiles import GuardError, SwitchInterrupted, SwitchReport, assign, local_now, switch
 from minecraft_setup.engine.publish import Client, find_repo, git_publish, publish_pack
 from minecraft_setup.engine.remote import CACHE, RemoteError, load_packs
 from minecraft_setup.engine.selection import choosable, default_choice
 from minecraft_setup.engine.worlds import list_worlds
-
-LOADER_NAMES = {"fabric": "Fabric", "neoforge": "NeoForge"}
-
 
 @dataclass
 class Services:
@@ -38,19 +34,7 @@ def services() -> Services:
 
 
 def _running(game: GameDir) -> Callable[[], bool]:
-    """The game check for `game`, failing closed: an unanswerable query refuses instead of guessing."""
-
-    def check() -> bool:
-        try:
-            return running_in(game.root)
-        except (OSError, subprocess.SubprocessError) as error:
-            raise GuardError(f"Cannot tell whether Minecraft is running ({error}) - refusing to continue.") from error
-
-    return check
-
-
-def needs(pack: PackInfo) -> str:
-    return f"{LOADER_NAMES[pack.loader]} {pack.loader_version} for Minecraft {pack.game_version}"
+    return running_check(game.root, running_in)
 
 
 @dataclass

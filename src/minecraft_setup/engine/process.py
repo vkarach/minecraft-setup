@@ -1,7 +1,10 @@
 import os
 import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
+
+from minecraft_setup.engine.profiles import GuardError
 
 # unquoted values may hold spaces, so they run up to the next option
 _GAME_DIR = re.compile(r'--gameDir\s+(?:"([^"]*)"|(.+?))(?=\s+--|\s*$)')
@@ -36,3 +39,15 @@ def running_in(game_dir: Path) -> bool:
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
     return any(uses_game_dir(line, game_dir) for line in result.stdout.splitlines())
+
+
+def running_check(game_dir: Path, probe: Callable[[Path], bool] = running_in) -> Callable[[], bool]:
+    """The game check for `game_dir`, failing closed: an unanswerable query refuses instead of guessing."""
+
+    def check() -> bool:
+        try:
+            return probe(game_dir)
+        except (OSError, subprocess.SubprocessError) as error:
+            raise GuardError(f"Cannot tell whether Minecraft is running ({error}) - refusing to continue.") from error
+
+    return check

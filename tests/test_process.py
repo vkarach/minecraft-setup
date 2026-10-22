@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 
 from minecraft_setup.engine import process
-from minecraft_setup.engine.process import running_in, uses_game_dir
+from minecraft_setup.engine.process import running_check, running_in, uses_game_dir
+from minecraft_setup.engine.profiles import GuardError
 
 ROOT = Path(r"C:\Users\A\AppData\Roaming\.minecraft")
 SOLO = ROOT / "versions" / "Solo"
@@ -38,3 +39,12 @@ def test_running_in_reads_every_java_process(monkeypatch, lines, expected):
 
     monkeypatch.setattr(process.subprocess, "run", run)
     assert running_in(ROOT) is expected
+
+
+def test_running_check_fails_closed(tmp_path):
+    def broken(game_dir):
+        raise subprocess.TimeoutExpired("powershell.exe", 60)
+
+    with pytest.raises(GuardError, match="Cannot tell"):
+        running_check(tmp_path, broken)()
+    assert running_check(tmp_path, lambda game_dir: game_dir == tmp_path)()

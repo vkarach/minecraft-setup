@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Minecraft Setup</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">Minecraft Setup <span id="version" class="muted"></span></div>
+    <div id="badges"></div>
+    <button id="refresh" class="ghost" title="Check the repo again">Refresh</button>
+  </header>
+  <div id="app-update" class="banner info" hidden>
+    <span>App update <b id="app-version"></b> is out.</span>
+    <button id="app-apply">Update and restart</button>
+  </div>
+  <div id="notice" class="banner" hidden></div>
+  <nav id="tabs" class="tabs"></nav>
+  <main id="pack"><p class="muted">Loading...</p></main>
+  <div id="busy" class="busy" hidden><div class="spinner"></div><span id="busy-text">Working...</span></div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -10,6 +10,7 @@ _FABRIC_LIB = "net.fabricmc:fabric-loader:"
 _NEOFORGE_LIB = "net.neoforged:neoforge:"
 _NEOFORGE_ARG = "--fml.neoForgeVersion"
 _ADDITIONAL = "TLauncherAdditional.json"
+LOADER_NAMES = {"fabric": "Fabric", "neoforge": "NeoForge"}
 
 
 @dataclass(frozen=True)
@@ -89,3 +90,8 @@ def match(pack: PackInfo, installs: list[Install]) -> Install | None:
     exact = [i for i in fits if i.loader_version == pack.loader_version]
     best = sorted(exact or fits, key=lambda i: i.name)
     return best[0] if best else None
+
+
+def needs(pack: PackInfo) -> str:
+    """What to install in the launcher to run `pack`."""
+    return f"{LOADER_NAMES[pack.loader]} {pack.loader_version} for Minecraft {pack.game_version}"

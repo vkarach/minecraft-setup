@@ -1,0 +1,158 @@
+:root {
+  --bg: #16181d;
+  --panel: #1f232a;
+  --line: #2e333c;
+  --text: #e6e8eb;
+  --muted: #8b929c;
+  --accent: #5cb85c;
+  --accent-dark: #3f8f3f;
+  --warn: #d9a441;
+  --error: #d9534f;
+  --info: #4a90d9;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 "Segoe UI", system-ui, sans-serif;
+}
+
+button {
+  background: var(--accent-dark);
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { background: var(--accent); }
+button:disabled { opacity: 0.45; cursor: default; }
+button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+button.ghost:hover:not(:disabled) { background: var(--panel); }
+button.small { padding: 2px 8px; font-size: 12px; }
+button.active { background: var(--accent); }
+
+.muted { color: var(--muted); }
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 600; font-size: 16px; flex: 1; }
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  background: var(--line);
+  color: var(--text);
+}
+.badge.warn { background: var(--warn); color: #000; }
+.badge.req { background: #3a4252; }
+
+.banner {
+  margin: 10px 18px 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--panel);
+  border-left: 4px solid var(--muted);
+}
+.banner.info { border-color: var(--info); }
+.banner.warn { border-color: var(--warn); }
+.banner.error { border-color: var(--error); }
+.banner.ok { border-color: var(--accent); }
+.banner span { flex: 1; }
+
+.tabs { display: flex; gap: 4px; padding: 12px 18px 0; border-bottom: 1px solid var(--line); }
+.tab {
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px 6px 0 0;
+  padding: 8px 16px;
+}
+.tab.active { background: var(--panel); color: var(--text); }
+.tab:hover:not(.active) { background: var(--panel); color: var(--text); }
+
+main { padding: 14px 18px 40px; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.card h2 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+.card .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.card .row > .grow { flex: 1; }
+
+.changes { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
+.changes b { color: var(--text); font-weight: 600; }
+
+.group { margin-top: 10px; }
+.group h3 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.mod {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+  border-radius: 4px;
+}
+.mod:hover { background: #262b33; }
+.mod .name { flex: 1 1 0; min-width: 35%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mod.off .name { color: var(--muted); }
+.mod input { accent-color: var(--accent); width: 16px; height: 16px; }
+.mod .why {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 60%;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+details summary { cursor: pointer; color: var(--muted); margin-top: 10px; }
+
+table { width: 100%; border-collapse: collapse; }
+td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+
+.busy {
+  position: fixed;
+  inset: auto 18px 18px auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 10px 14px;
+  border-radius: 8px;
+}
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
