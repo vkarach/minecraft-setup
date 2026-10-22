@@ -20,20 +20,24 @@ touch your game.
 
 ## What it does
 
-| | |
-|---|---|
-| **Finds your game** | Detects `.minecraft` and the TLauncher versions in it, and matches each pack to the right one. Tells you what to install when a version is missing. |
-| **Your mods, your choice** | Server mods are locked on - everyone needs them to join. Client mods (shaders, HUD, sounds...) are checkboxes. |
-| **Libraries sort themselves out** | A library stays on while anything ticked needs it, and goes away with the last mod that used it. |
-| **Updates on start** | New, updated and removed mods are listed before anything happens. Replaced files go to `backup\`. |
-| **Leaves your stuff alone** | Configs, `options.txt` and shader settings are written only when missing. Mods you added yourself are never touched. |
-| **Safe while playing** | Refuses to change a pack whose game is running. |
-| **Profiles for 26.3** | Vanilla / Full switch with the world guard: worlds of the other profile are hidden so they never load with the wrong mods. |
-| **Updates itself** | New app versions come from GitHub Releases, verified by sha256. |
+- **Finds your game.** Detects `.minecraft` and the TLauncher versions in it, and matches each pack to the right one.
+  Tells you what to install when a version is missing.
+- **Your mods, your choice.** Server mods have no checkbox - everyone needs them to join. Client mods (shaders, HUD,
+  sounds...) are checkboxes; your picks are saved when you press **Apply**.
+- **Libraries sort themselves out.** A library stays on while anything ticked needs it, and goes away with the last
+  mod that used it - Kotlin language mods included.
+- **Updates on start.** New, updated and removed mods are listed before anything happens. Replaced and removed files
+  go to `backup\update-<date>_<time>`.
+- **Leaves your stuff alone.** Configs, `options.txt` and shader settings are written only when missing. Mods you
+  added yourself are left alone (one exception on 26.3, see the FAQ).
+- **Safe while playing.** Refuses to change a pack whose game is running.
+- **Profiles for 26.3.** Vanilla / Full switch with the world guard: worlds of the other profile are hidden so they
+  never load with the wrong mods. A world left hidden in the current profile comes back with the profile button.
+- **Updates itself.** New app versions come from GitHub Releases, verified by sha256.
 
 <p align="center">
   <img src="docs/images/mods.png" alt="Mod list with checkboxes grouped by kind" width="49%">
-  <img src="docs/images/libraries.png" alt="Libraries with what needs them, server mods locked" width="49%">
+  <img src="docs/images/libraries.png" alt="Libraries with the mods that need them, server mods marked" width="49%">
 </p>
 
 ## Get started (friends)
@@ -51,12 +55,15 @@ The exe never has to be sent around again.
 **Will it reset my settings?** No. Config files are only written where they do not exist yet, so your keybinds,
 video settings and shader options stay.
 
-**I added a mod myself.** It is listed under "Your own mods" and left alone.
+**I added a mod myself.** It is listed under "Your own mods" and left alone. On 26.3 do not name it `4x ...` or
+`5x ...`: those prefixes belong to the Full profile, and the profile switch turns such jars on and off with it.
 
-**Something went wrong mid-update.** Every replaced or removed file is in `backup\update-<date>` inside the game folder.
+**Something went wrong mid-update.** Every replaced or removed file is in `backup\update-<date>_<time>` inside the game
+folder. Mods that were only turned on or off are renamed to and from `.disabled`, not copied.
 
-**Where does it keep its data?** Your choices live in `minecraft-setup.json` in the game folder, a copy of the pack
-list in `%LOCALAPPDATA%\minecraft-setup` (so it also opens offline).
+**Where does it keep its data?** Your choices go to `minecraft-setup.json` in the game folder when you press
+**Apply** (ticking alone keeps them only until the app closes), a copy of the pack list to
+`%LOCALAPPDATA%\minecraft-setup` (so it also opens offline).
 
 ## For the owner
 
@@ -80,4 +87,4 @@ uv run minecraft-setup --help      # the same engine from the command line
 uv run pyinstaller minecraft-setup.spec
 ```
 
-Python 3.14, pywebview for the window, plain HTML/CSS/JS for the screen, PyInstaller for the one-file exe.
+Python 3.13+ (3.14 pinned for development and the exe), pywebview for the window, plain HTML/CSS/JS for the screen, PyInstaller for the one-file exe.
