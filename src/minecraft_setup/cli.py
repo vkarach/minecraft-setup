@@ -69,11 +69,13 @@ class _Context:
         return with_profiles[0]
 
 
-def _context(args: argparse.Namespace) -> _Context:
+def _context(args: argparse.Namespace, remote: bool = True) -> _Context:
     minecraft = args.minecraft or find_minecraft()
     if minecraft is None:
         raise GuardError("No .minecraft folder with versions found - pass --minecraft PATH.")
     svc = services()
+    if not remote:
+        return _Context(svc, minecraft, [], False, find_installs(minecraft))
     try:
         packs, offline = load_packs(svc.http, svc.cache)
     except RemoteError as error:
@@ -234,7 +236,7 @@ def _publish(args: argparse.Namespace) -> int:
     repo = args.repo or services().repo
     if repo is None:
         raise GuardError("No local clone of the minecraft-setup repo with git found - pass --repo PATH.")
-    ctx = _context(args)
+    ctx = _context(args, remote=False)
     local = repo / "packs" / args.pack / "manifest.json"
     if local.is_file():
         info = Manifest.load(local).pack

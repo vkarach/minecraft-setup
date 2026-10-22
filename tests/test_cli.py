@@ -1,5 +1,7 @@
+import io
 import json
 import subprocess
+import zipfile
 
 import pytest
 
@@ -12,6 +14,7 @@ from helpers import (
     neoforge_install,
     fabric_install,
     pack,
+    put,
     served_packs,
 )
 from manifests import entry, info, manifest
@@ -229,3 +232,18 @@ def test_self_update_up_to_date(game, capsys, http):
     http.served[RELEASES] = json.dumps({"tag_name": "v0.0.1", "assets": []}).encode()
     assert run(game, "self-update") == 0
     assert "up to date" in capsys.readouterr().out.lower()
+
+
+def test_first_publish_needs_no_published_packs(game, capsys, http, tmp_path, monkeypatch):
+    http.fail.update(http.served)
+    modrinth = FakeModrinth()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("fabric.mod.json", json.dumps({"id": "a"}))
+    put(game.root, "mods/20 visual - a.jar", buffer.getvalue())
+    modrinth.publish(buffer.getvalue(), "a.jar", "a")
+    monkeypatch.setattr(cli, "services", lambda: cli.Services(http, modrinth, tmp_path / "cache", None))
+    repo = tmp_path / "repo"
+    assert run(game, "publish", "fabric-26.3", "--repo", str(repo), "--title", "Fabric 26.3",
+               "--install", "Fabric 26.3", "--profiles", "--no-push") == 0
+    assert (repo / "packs" / "fabric-26.3" / "manifest.json").is_file()
