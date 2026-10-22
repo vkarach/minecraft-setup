@@ -7,7 +7,6 @@ from typing import Literal
 
 from minecraft_setup.engine.gamedir import GameDir
 from minecraft_setup.engine.mods import DISABLED, PROFILE_GROUPS, ModFile, Profile, detect, leaving, list_mods
-from minecraft_setup.engine.process import is_minecraft_running
 from minecraft_setup.engine.state import read_since, write_since
 from minecraft_setup.engine.worlds import marker, opened_since, tag, world_dirs, world_profile
 
@@ -208,7 +207,7 @@ def switch(
     game: GameDir,
     target: Profile,
     *,
-    running: Callable[[], bool] = is_minecraft_running,
+    running: Callable[[], bool],
     now: Callable[[], datetime] = local_now,
 ) -> SwitchReport:
     """Enable exactly the target's mod groups, guarding worlds against the wrong mods."""
@@ -231,7 +230,7 @@ def switch(
 
 
 def assign(
-    game: GameDir, profile: Profile, names: list[str], *, running: Callable[[], bool] = is_minecraft_running
+    game: GameDir, profile: Profile, names: list[str], *, running: Callable[[], bool]
 ) -> list[str]:
     """Tag untouched worlds with `profile`, then hide, relocate and restore worlds for the current mods."""
     _refuse_while_running(running)

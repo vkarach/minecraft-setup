@@ -8,7 +8,7 @@ from pathlib import Path
 
 from minecraft_setup.engine.gamedir import GameDir
 from minecraft_setup.engine.mods import MANAGED, Profile, detect, list_mods
-from minecraft_setup.engine.process import is_minecraft_running
+from minecraft_setup.engine.process import running_in
 from minecraft_setup.engine.profiles import GuardError, SwitchInterrupted, SwitchReport, assign, switch
 from minecraft_setup.engine.worlds import list_worlds
 
@@ -22,12 +22,16 @@ _MAKE_SHORTCUT = (
 )
 
 
-def _running() -> bool:
-    """The game check, failing closed: an unanswerable query refuses instead of guessing."""
-    try:
-        return is_minecraft_running()
-    except (OSError, subprocess.SubprocessError) as error:
-        raise GuardError(f"Cannot tell whether Minecraft is running ({error}) - refusing to continue.") from error
+def _running(game: GameDir) -> Callable[[], bool]:
+    """The game check for `game`, failing closed: an unanswerable query refuses instead of guessing."""
+
+    def check() -> bool:
+        try:
+            return running_in(game.root)
+        except (OSError, subprocess.SubprocessError) as error:
+            raise GuardError(f"Cannot tell whether Minecraft is running ({error}) - refusing to continue.") from error
+
+    return check
 
 
 def _label(value: Profile | str) -> str:
@@ -83,7 +87,7 @@ def _profile(args: argparse.Namespace) -> int:
     target = Profile(args.profile)
     current = _header(game)
     try:
-        report = switch(game, target, running=_running)
+        report = switch(game, target, running=_running(game))
     except SwitchInterrupted as error:
         _print_report(game, error.report, target)
         print(error)
@@ -99,7 +103,7 @@ def _assign(args: argparse.Namespace) -> int:
     _header(game)
     owned = {w.name.casefold() for w in list_worlds(game) if w.profile == profile}
     try:
-        tagged = assign(game, profile, args.worlds, running=_running)
+        tagged = assign(game, profile, args.worlds, running=_running(game))
     except SwitchInterrupted as error:
         _print_report(game, error.report, profile)
         print(error)

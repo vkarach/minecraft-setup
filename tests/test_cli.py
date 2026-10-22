@@ -14,7 +14,7 @@ from minecraft_setup.engine.profiles import SwitchInterrupted, SwitchReport
 
 @pytest.fixture(autouse=True)
 def game_stopped(monkeypatch):
-    monkeypatch.setattr(cli, "is_minecraft_running", lambda: False)
+    monkeypatch.setattr(cli, "running_in", lambda game_dir: False)
 
 
 def run(game, *args):
@@ -48,7 +48,7 @@ def test_profile_switch_exit_codes(game, capsys):
 
 def test_running_game_exit_1(game, capsys, monkeypatch):
     pack(game, Profile.FULL)
-    monkeypatch.setattr(cli, "is_minecraft_running", lambda: True)
+    monkeypatch.setattr(cli, "running_in", lambda game_dir: True)
     assert run(game, "profile", "vanilla") == 1
     assert "Minecraft is running" in capsys.readouterr().out
 
@@ -57,10 +57,10 @@ def test_failed_running_check_fails_closed(game, capsys, monkeypatch):
     pack(game, Profile.FULL)
     before = files(game)
 
-    def broken():
+    def broken(game_dir):
         raise subprocess.CalledProcessError(1, "powershell.exe")
 
-    monkeypatch.setattr(cli, "is_minecraft_running", broken)
+    monkeypatch.setattr(cli, "running_in", broken)
     assert run(game, "profile", "vanilla") == 1
     assert "Cannot tell whether Minecraft is running" in capsys.readouterr().out
     assert files(game) == before

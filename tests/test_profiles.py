@@ -1,13 +1,10 @@
 import inspect
-import subprocess
 from datetime import datetime, timedelta
 
 import pytest
 
 from helpers import BEFORE, CLIENT, FULL, LATER, T0, busy, clock, files, fill, idle, make_jar, make_world, pack
-from minecraft_setup.engine import process
 from minecraft_setup.engine.mods import Profile, detect, leaving, list_mods
-from minecraft_setup.engine.process import is_minecraft_running
 from minecraft_setup.engine.profiles import GameRunningError, GuardError, assign, switch
 from minecraft_setup.engine.state import read_since
 
@@ -90,24 +87,8 @@ def test_running_blocks_switch_and_assign(game):
     assert read_since(game) == T0
 
 
-@pytest.mark.parametrize(
-    ("cmdline", "expected"),
-    [
-        ("javaw.exe -cp x NET.FABRICMC.loader.impl.launch.knot.knotclient", True),
-        ("javaw.exe -cp x net.fabricmc.loader.impl.launch.knot.KnotClient", True),
-        ("javaw.exe -jar server.jar nogui", False),
-    ],
-)
-def test_running_check_ignores_case(monkeypatch, cmdline, expected):
-    def run(args, **kwargs):
-        return subprocess.CompletedProcess(args, 0, stdout=cmdline + "\n")
-
-    monkeypatch.setattr(process.subprocess, "run", run)
-    assert is_minecraft_running() is expected
-
-
-def test_switch_and_assign_default_to_the_real_checks():
+def test_switch_and_assign_need_an_explicit_running_check():
     for func in (switch, assign):
-        assert inspect.signature(func).parameters["running"].default is is_minecraft_running
+        assert inspect.signature(func).parameters["running"].default is inspect.Parameter.empty
     now = inspect.signature(switch).parameters["now"].default()
     assert now.utcoffset() == datetime.now().astimezone().utcoffset()
