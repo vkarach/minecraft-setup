@@ -135,6 +135,7 @@ details summary { cursor: pointer; color: var(--muted); margin-top: 10px; }
 table { width: 100%; border-collapse: collapse; }
 td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 500; font-size: 12px; }
+td.warn { color: var(--warn); }
 
 .busy {
   position: fixed;

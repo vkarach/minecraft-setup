@@ -101,6 +101,7 @@ function summary(result) {
   count("configs", "configs written");
   count("hidden", "worlds hidden");
   count("restored", "worlds back");
+  count("kept", "worlds left hidden (name taken in saves)");
   return parts.length ? `Done: ${parts.join(", ")}.` : "Done.";
 }
 
@@ -199,14 +200,24 @@ function modsCard(pack) {
 
 function profileCard(pack) {
   if (!pack.profile) return null;
-  const button = (name) => el("button", {
-    class: pack.profile === name ? "active" : "ghost", disabled: busy || pack.profile === name,
-    onclick: () => run(() => api().switch_profile(name), `Switching to ${name}...`),
-  }, name === "full" ? "Full (with friends)" : "Vanilla");
+  const back = pack.restorable.length;
+  const button = (name) => {
+    const here = pack.profile === name;
+    return el("button", {
+      class: here ? "active" : "ghost", disabled: busy || (here && !back),
+      title: here && back ? `Bring back: ${pack.restorable.join(", ")}` : null,
+      onclick: () => run(() => api().switch_profile(name), here ? "Bringing worlds back..." : `Switching to ${name}...`),
+    }, name === "full" ? "Full (with friends)" : "Vanilla", here && back ? ` - bring back ${back}` : null);
+  };
+  const states = {
+    visible: "visible", hidden: "hidden",
+    restorable: "hidden - comes back with the profile button",
+    stuck: "hidden - a world with this name is in saves, rename one",
+  };
   const rows = pack.worlds.map((world) => el("tr", {},
     el("td", {}, world.name),
     el("td", {}, world.profile || "-"),
-    el("td", {}, world.visible ? "visible" : "hidden"),
+    el("td", { class: world.state === "stuck" ? "warn" : null }, states[world.state]),
     el("td", {}, world.profile ? null : ["vanilla", "full"].map((name) =>
       el("button", { class: "ghost small", disabled: busy, onclick: () => run(() => api().assign(name, [world.name]), "Tagging...") }, `tag ${name}`)))));
   return el("div", { class: "card" },

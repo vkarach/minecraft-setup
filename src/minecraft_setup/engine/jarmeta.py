@@ -12,6 +12,8 @@ BUILTIN_IDS = frozenset({"minecraft", "java", "fabricloader", "neoforge", "forge
 _FABRIC = "fabric.mod.json"
 _NEOFORGE = ("META-INF/neoforge.mods.toml", "META-INF/mods.toml")
 _JARJAR = "META-INF/jarjar/metadata.json"
+# any other modLoader is a language mod (kotlinforforge, klf) the jar cannot load without
+_JAVA_LOADERS = ("javafml", "lowcodefml")
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,8 @@ def _neoforge(archive: zipfile.ZipFile, ids: set[str], depends: set[str]) -> lis
             continue
         meta = tomllib.loads(raw)
         ids.update(mod["modId"] for mod in meta.get("mods", []))
+        if meta.get("modLoader", _JAVA_LOADERS[0]) not in _JAVA_LOADERS:
+            depends.add(meta["modLoader"])
         for deps in meta.get("dependencies", {}).values():
             depends.update(dep["modId"] for dep in deps if _required(dep))
         break

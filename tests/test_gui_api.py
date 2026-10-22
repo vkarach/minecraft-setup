@@ -2,8 +2,9 @@ import time
 
 import pytest
 
-from helpers import FakeModrinth, fabric_install, files, served_packs
+from helpers import FakeModrinth, fabric_install, files, make_world, served_packs
 from manifests import entry, manifest
+from minecraft_setup.engine.mods import Profile
 from minecraft_setup.engine.profiles import GuardError
 from minecraft_setup.gui import api as api_module
 from minecraft_setup.gui.api import Api
@@ -96,6 +97,20 @@ def test_apply_job_reports_error(make, monkeypatch):
 
 def test_unknown_pack_is_an_error_not_an_exception(make):
     assert "nope" in make().apply("nope")["error"]
+
+
+def test_hidden_worlds_of_the_current_profile_can_come_back(make, game):
+    make_world(game, "Lost", marker="vanilla", where=game.vault(Profile.VANILLA))
+    make_world(game, "Twin", marker="vanilla", where=game.vault(Profile.VANILLA))
+    make_world(game, "Twin")
+    make_world(game, "Other", marker="full", where=game.vault(Profile.FULL))
+    api = make()
+    pack = api.state()["packs"][0]
+    assert pack["profile"] == "vanilla" and pack["restorable"] == ["Lost"]
+    states = {w["name"] + "/" + (w["profile"] or "-"): w["state"] for w in pack["worlds"]}
+    assert states == {"Lost/vanilla": "restorable", "Twin/vanilla": "stuck", "Twin/-": "visible", "Other/full": "hidden"}
+    assert wait(api, api.switch_profile("vanilla"))["error"] is None
+    assert api.state()["packs"][0]["restorable"] == []
 
 
 def test_owner_only_with_repo(make, tmp_path):

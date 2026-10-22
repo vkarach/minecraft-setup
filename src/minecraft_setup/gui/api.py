@@ -44,6 +44,20 @@ def _safe(method: Callable[..., dict]) -> Callable[..., dict]:
     return wrapper
 
 
+def _worlds(game: GameDir, current: Profile | str) -> list[dict]:
+    """Worlds with where they stand; own worlds left in the active vault come back on a switch to it."""
+    worlds = list_worlds(game)
+    in_saves = {w.name.casefold() for w in worlds if w.visible}
+    found = []
+    for w in worlds:
+        state = "visible" if w.visible else "hidden"
+        if not w.visible and isinstance(current, Profile) and w.path.parent == game.vault(current):
+            if w.profile in (current, None):
+                state = "stuck" if w.name.casefold() in in_saves else "restorable"
+        found.append({"name": w.name, "profile": w.profile.value if w.profile else None, "state": state})
+    return found
+
+
 class Api:
     """What the window's JS calls; names starting with '_' stay hidden from it."""
 
@@ -128,7 +142,7 @@ class Api:
         view: dict[str, Any] = {
             "id": m.pack.id, "title": m.pack.title, "install": install.name if install else None,
             "needs": None if install else needs(m.pack), "mods": [], "update": None, "own": [],
-            "problem": None, "profile": None, "worlds": [], "pending": m.pack.id in self._choices,
+            "problem": None, "profile": None, "worlds": [], "restorable": [], "pending": m.pack.id in self._choices,
         }
         try:
             game = GameDir(install.game_dir) if install else None
@@ -146,10 +160,8 @@ class Api:
             if m.pack.profiles:
                 current = detect(list_mods(game))
                 view["profile"] = current.value if isinstance(current, Profile) else current
-                view["worlds"] = [
-                    {"name": w.name, "profile": w.profile.value if w.profile else None, "visible": w.visible}
-                    for w in list_worlds(game)
-                ]
+                view["worlds"] = _worlds(game, current)
+                view["restorable"] = [w["name"] for w in view["worlds"] if w["state"] == "restorable"]
             plan = plan_update(game, m, chosen)
             view["own"] = plan.own
             view["update"] = None if plan.empty else asdict(plan)

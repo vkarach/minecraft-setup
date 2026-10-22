@@ -65,6 +65,15 @@ def test_neoforge_jarjar_nested(tmp_path):
     assert read_jar(path, "neoforge").ids == frozenset({"top", "x"})
 
 
+def test_neoforge_language_loader_is_a_dependency(tmp_path):
+    kotlin = jar(tmp_path, {"META-INF/neoforge.mods.toml": 'modLoader="kotlinforforge"\n[[mods]]\nmodId="ipn"\n'})
+    java = jar(tmp_path, {"META-INF/neoforge.mods.toml": 'modLoader="javafml"\n[[mods]]\nmodId="j"\n'}, "j.jar")
+    lowcode = jar(tmp_path, {"META-INF/neoforge.mods.toml": 'modLoader="lowcodefml"\n[[mods]]\nmodId="l"\n'}, "l.jar")
+    assert read_jar(kotlin, "neoforge") == JarMeta(frozenset({"ipn"}), frozenset({"kotlinforforge"}))
+    assert read_jar(java, "neoforge").depends == frozenset()
+    assert read_jar(lowcode, "neoforge").depends == frozenset()
+
+
 def test_non_mod_jar_is_empty(tmp_path):
     assert read_jar(jar(tmp_path, {"a.txt": "x"}), "fabric") == JarMeta(frozenset(), frozenset())
 
