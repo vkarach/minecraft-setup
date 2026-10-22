@@ -21,6 +21,8 @@ from minecraft_setup.engine.sides import classify
 
 SECRET = re.compile(r'(?i)(access|client)_?token|password|"token"\s*:')
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# raw downloads are checked against the manifest hashes, so git must keep every byte, line endings included
+_ATTRIBUTES = b"* -text\n"
 
 
 class PublishError(GuardError):
@@ -170,6 +172,7 @@ def publish_pack(install: Install, info: PackInfo, repo: Path, client: Client, *
     changed = _mirror(GameDir(install.game_dir), m, pack / "files")
     changed |= _write(pack / "manifest.json", m.dumps().encode("ascii"))
     changed |= _index(repo / "packs", info.id)
+    changed |= _write(repo / "packs" / ".gitattributes", _ATTRIBUTES)
     return PublishReport(info.id, len(m.entries), len(m.configs), changed)
 
 
@@ -204,6 +207,10 @@ def git_publish(repo: Path, pack_id: str, run=subprocess.run) -> bool:
         return result
 
     git("add", "--", "packs")
+    git("add", "--renormalize", "--", "packs")
+    ignored = git("ls-files", "--others", "--ignored", "--exclude-standard", "--", "packs").stdout.split("\n")
+    if any(ignored):
+        raise PublishError(f".gitignore hides published files, friends would miss them: {', '.join(filter(None, ignored))}.")
     if git("diff", "--cached", "--quiet", "--", "packs", check=False).returncode == 0:
         return False
     git("commit", "-m", f"publish {pack_id}", "--", "packs")

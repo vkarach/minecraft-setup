@@ -10,8 +10,8 @@ TlauncherProfiles.json
 launcher_profiles.json
 usercache.json
 usernamecache.json
-saves*/
-logs/
-crash-reports/
-xaero/
+/packs/*/files/saves*/
+/packs/*/files/logs/
+/packs/*/files/crash-reports/
+/packs/*/files/xaero/
 *.jar

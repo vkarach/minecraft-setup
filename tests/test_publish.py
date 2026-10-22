@@ -1,5 +1,6 @@
 import io
 import json
+import shutil
 import subprocess
 import zipfile
 
@@ -145,6 +146,8 @@ def test_git_publish_commands(tmp_path):
     assert git_publish(tmp_path, "solo", run=run)
     assert run.calls == [
         ["git", "add", "--", "packs"],
+        ["git", "add", "--renormalize", "--", "packs"],
+        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "--", "packs"],
         ["git", "diff", "--cached", "--quiet", "--", "packs"],
         ["git", "commit", "-m", "publish solo", "--", "packs"],
         ["git", "push"],
@@ -167,3 +170,52 @@ def test_find_repo_walks_up_to_the_clone(tmp_path):
     (other / ".git").mkdir()
     assert find_repo([other, repo / "src" / "pkg"]) == repo
     assert find_repo([other]) is None
+
+
+def git_repo(path):
+    path.mkdir()
+    for args in (["init", "-q"], ["config", "core.autocrlf", "true"], ["config", "user.email", "t@example.com"],
+                 ["config", "user.name", "t"], ["config", "commit.gpgsign", "false"]):
+        subprocess.run(["git", *args], cwd=path, check=True, capture_output=True)
+    return path
+
+
+def no_push(argv, **kwargs):
+    if argv[1] == "push":
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    return subprocess.run(argv, **kwargs)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_published_bytes_survive_line_ending_conversion(live, modrinth, tmp_path):
+    repo = git_repo(tmp_path / "repo")
+    put(live.root, "config/crlf.toml", b"a = 1\r\nb = 2\r\n")
+    publish_pack(install(live), info(), repo, modrinth, running=idle)
+    assert git_publish(repo, "fabric-26.3", run=no_push)
+    shown = subprocess.run(["git", "show", "HEAD:packs/fabric-26.3/files/config/crlf.toml"], cwd=repo,
+                           check=True, capture_output=True).stdout
+    assert shown == b"a = 1\r\nb = 2\r\n"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_ignored_pack_file_refuses_publish(live, modrinth, tmp_path):
+    repo = git_repo(tmp_path / "repo")
+    put(repo, ".gitignore", "xaero/\n")
+    put(live.root, "config/xaero/client.cfg", "x")
+    publish_pack(install(live), info(), repo, modrinth, running=idle)
+    with pytest.raises(PublishError, match="client.cfg"):
+        git_publish(repo, "fabric-26.3", run=no_push)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_republish_fixes_bytes_stored_before_the_attributes(live, modrinth, tmp_path):
+    repo = git_repo(tmp_path / "repo")
+    put(repo, "packs/fabric-26.3/files/config/crlf.toml", b"a = 1\r\n")
+    for args in (["add", "--", "packs"], ["commit", "-q", "-m", "old"]):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    put(live.root, "config/crlf.toml", b"a = 1\r\n")
+    publish_pack(install(live), info(), repo, modrinth, running=idle)
+    assert git_publish(repo, "fabric-26.3", run=no_push)
+    shown = subprocess.run(["git", "show", "HEAD:packs/fabric-26.3/files/config/crlf.toml"], cwd=repo,
+                           check=True, capture_output=True).stdout
+    assert shown == b"a = 1\r\n"
