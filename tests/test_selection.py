@@ -57,5 +57,12 @@ def test_orphan_library_is_choosable():
     assert resolve(m, frozenset({orphan.name})) == {orphan.name}
 
 
+def test_pack_archives_are_not_choices():
+    shader = entry("Comp.zip", dir="shaderpacks")
+    m = manifest(A, L1, L2, shader)
+    assert shader.name not in default_choice(m)
+    assert shader.name not in resolve(m, frozenset({shader.name, A.name}))
+
+
 def test_default_choice_is_client_defaults_only():
     assert default_choice(M) == {A.name, B.name}

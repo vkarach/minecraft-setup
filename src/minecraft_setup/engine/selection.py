@@ -15,10 +15,15 @@ def _deps(entry: ModEntry, providers: dict[str, list[ModEntry]]) -> list[ModEntr
 
 
 def _choosable(m: Manifest) -> list[ModEntry]:
-    """Client entries the user can tick; a library something depends on only follows its dependents."""
+    """Client jars the user can tick; a library something depends on only follows its dependents."""
     providers = _providers(m)
     needed = {p.name for e in m.entries for p in _deps(e, providers)}
-    return [e for e in m.entries if e.side == "client" and not (e.library and e.name in needed)]
+    return [e for e in _jars(m) if e.side == "client" and not (e.library and e.name in needed)]
+
+
+def _jars(m: Manifest) -> list[ModEntry]:
+    # resource and shader packs load only when picked in game, so they are always installed
+    return [e for e in m.entries if e.dir == "mods"]
 
 
 def default_choice(m: Manifest) -> frozenset[str]:
@@ -29,7 +34,7 @@ def resolve(m: Manifest, chosen: frozenset[str]) -> frozenset[str]:
     """Entry names to enable: required ones, chosen ones, and everything they depend on."""
     providers = _providers(m)
     by_name = {e.name: e for e in m.entries}
-    start = [e for e in m.entries if e.side == "required"] + [e for e in _choosable(m) if e.name in chosen]
+    start = [e for e in _jars(m) if e.side == "required"] + [e for e in _choosable(m) if e.name in chosen]
     enabled: set[str] = set()
     todo = list(start)
     while todo:
