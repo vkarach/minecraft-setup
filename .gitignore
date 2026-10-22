@@ -5,18 +5,13 @@ __pycache__/
 *.spec.bak
 docs/superpowers/
 .superpowers/
-/TlauncherProfiles.json
-/launcher_profiles.json
-/usercache.json
-/saves*
-/logs
-/crash-reports
-/xaero
-/pack/files/TlauncherProfiles.json
-/pack/files/launcher_profiles.json
-/pack/files/usercache.json
-/pack/files/saves*
-/pack/files/logs
-/pack/files/crash-reports
-/pack/files/xaero
+# never publish launcher accounts, logs or worlds, wherever they land
+TlauncherProfiles.json
+launcher_profiles.json
+usercache.json
+usernamecache.json
+saves*/
+logs/
+crash-reports/
+xaero/
 *.jar

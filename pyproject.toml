@@ -1,7 +1,7 @@
 [project]
 name = "minecraft-setup"
-version = "0.1.0"
-description = "Manage a Minecraft Fabric modpack: profiles, worlds, sync and export"
+version = "0.2.0"
+description = "Install, update and choose the mods of our Minecraft packs from one portable exe"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
