@@ -1,0 +1,22 @@
+#Blacklist things, loved by server owners ;)
+[blacklists]
+	#List of disabled damage protection categories. Available: TOOL, ARMOR, SHIELD.
+	disabledCategoryNames = []
+	#List of disabled damage protection types. Available: AXE, PICKAXE, SHOVEL, HOE, SHEARS, SWORD, FISHING_ROD, FLINT_AND_STEEL, BOW, TRIDENT, CROSSBOW, HELMET, CHESTPLATE, LEGGINGS, BOOTS, SHIELD.
+	disabledTypeNames = []
+	#List of blacklisted items. Format is modId:itemId, modId can be omitted for vanilla.
+	blacklistedItemIds = []
+	#EXPERIMENTAL: Whitelist is intended for items whose types are not included above, such as knives from Farmer's Delight. 
+	#Items here will be forcefully protected as long as they are not blacklisted. Their durability will be set to 2 when being about to break.
+	#However, since only the click event is canceled, some illogical situations may occur.
+	#Format is modId:itemId, modId can be omitted for vanilla.
+	whitelistedItemIds = []
+
+#Create Deployer settings
+[deployer]
+	#Tools that disappear when a Create Deployer exhausts them.
+	#All other Deployer tools remain broken and stop the machine. Use fully qualified item IDs.
+	consumableItemIds = ["minecraft:wooden_sword", "minecraft:wooden_shovel", "minecraft:wooden_pickaxe", "minecraft:wooden_axe", "minecraft:wooden_hoe", "minecraft:stone_sword", "minecraft:stone_shovel", "minecraft:stone_pickaxe", "minecraft:stone_axe", "minecraft:stone_hoe", "minecraft:iron_sword", "minecraft:iron_shovel", "minecraft:iron_pickaxe", "minecraft:iron_axe", "minecraft:iron_hoe", "ae2:fluix_sword", "ae2:fluix_shovel", "ae2:fluix_pickaxe", "ae2:fluix_axe", "ae2:fluix_hoe"]
+	#Protect enchanted tools even when they are listed as Deployer consumables.
+	#Protected enchanted tools remain broken and stop the machine.
+	protectEnchantedItems = true

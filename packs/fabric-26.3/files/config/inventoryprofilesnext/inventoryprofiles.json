@@ -1,0 +1,36 @@
+{
+    "Features": {
+        "enable_profiles": {
+            "value": false
+        }
+    },
+    "ModSettings": {
+        "first_run": false,
+        "enable_profiles": {
+            "value": false
+        }
+    },
+    "AutoRefillSettings": {
+        "refill_armor": {
+            "value": false
+        },
+        "refill_before_tool_break": {
+            "value": false
+        },
+        "auto_refill_enable_indicator_icons": {
+            "value": false
+        }
+    },
+    "EditProfiles": {
+        "enable_profiles": {
+            "value": false
+        }
+    },
+    "Hotkeys": {
+        "open_gui_editor": {
+            "main": {
+                "keys": "LEFT_CONTROL,E"
+            }
+        }
+    }
+}

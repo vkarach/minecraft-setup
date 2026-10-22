@@ -1,0 +1,11 @@
+{
+    "com.tiviacz.travelersbackpack.client.screens.BackpackScreen": {
+        "ignore": true
+    },
+    "com.tiviacz.travelersbackpack.inventory.menu.BackpackItemMenu": {
+        "ignore": true
+    },
+    "com.tiviacz.travelersbackpack.inventory.menu.BackpackBlockEntityMenu": {
+        "ignore": true
+    }
+}

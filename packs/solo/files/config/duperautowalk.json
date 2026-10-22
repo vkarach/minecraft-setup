@@ -1,0 +1,7 @@
+{
+	position: "TOP_LEFT",
+	feedback: "HUD",
+	size: "SIXTEEN",
+	coords_x: 16,
+	coords_y: 16
+}

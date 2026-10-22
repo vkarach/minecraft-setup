@@ -1,0 +1,4 @@
+[
+  {"version":3},
+  {"ingredient":{"id":"spell_engine:spell_scroll","components":"{\"minecraft:item_model\":\"archers:spell_scroll/archer\",\"minecraft:item_name\":{fallback:\"item.archers.spell_scroll/archer\",translate:\"item.archers.spell_scroll/archer\"},\"minecraft:rarity\":\"uncommon\",\"spell_engine:spell_container\":{spell_ids:[\"archers:entangling_roots\"]}}"},"type":"item_stack","bookmarkType":"INGREDIENT"}
+]

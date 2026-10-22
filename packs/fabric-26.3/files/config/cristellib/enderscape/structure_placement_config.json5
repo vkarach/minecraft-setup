@@ -1,0 +1,12 @@
+{
+	"gateways": {
+		"salt": 69210808,
+		"separation": 12,
+		"spacing": 24
+	},
+	"ruins": {
+		"salt": 95286963,
+		"separation": 8,
+		"spacing": 24
+	}
+}

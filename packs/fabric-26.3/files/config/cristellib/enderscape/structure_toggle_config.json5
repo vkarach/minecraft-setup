@@ -1,0 +1,10 @@
+{
+	"gateways": {
+		"center_gateway": true,
+		"end_haven": true,
+		"large_center_gateway": true
+	},
+	"ruins": {
+		"mirestone_ruins": true
+	}
+}

@@ -1,0 +1,13 @@
+{
+  "render_trinkers_in_first_person": false,
+  "ui_style": "default",
+  "sidebar_height": 4,
+  "show_slot_indicator": false,
+  "show_slot_name_tooltip": false,
+  "show_item_tooltip": true,
+  "highlight_compatible_slots": false,
+  "gameplay": {
+    "equipment_hiding": false,
+    "cosmetic_slots": false
+  }
+}
