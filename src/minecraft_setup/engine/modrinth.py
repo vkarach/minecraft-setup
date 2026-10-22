@@ -1,30 +1,16 @@
-import hashlib
-import http.client
 import json
-import os
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
-from minecraft_setup import __version__
+from minecraft_setup.engine.http import Http, HttpError
 
 API = "https://api.modrinth.com/v2"
-# Modrinth asks every client for a User-Agent that names the project; nothing personal goes out
-USER_AGENT = f"minecraft-setup/{__version__} (github.com/vkarach/minecraft-setup)"
-_CHUNK = 1 << 20
+_BATCH = 100
 
 
-class ModrinthError(Exception):
-    """A Modrinth request or download failed; nothing was written to its destination."""
-
-
-class HashMismatch(ModrinthError):
-    def __init__(self, url: str, expected: str, actual: str) -> None:
-        super().__init__(f"sha512 mismatch for {url}: expected {expected[:16]}..., got {actual[:16]}...")
-        self.url = url
+class ModrinthError(HttpError):
+    """Modrinth answered with something this client cannot read."""
 
 
 @dataclass(frozen=True)
@@ -34,14 +20,6 @@ class VersionFile:
     file_name: str
     url: str
     sha512: str
-
-
-def sha512_of(path: Path) -> str:
-    digest = hashlib.sha512()
-    with path.open("rb") as stream:
-        while chunk := stream.read(_CHUNK):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _version_file(version: dict[str, Any], sha512: str | None = None) -> VersionFile | None:
@@ -57,26 +35,18 @@ def _version_file(version: dict[str, Any], sha512: str | None = None) -> Version
 
 
 class ModrinthClient:
-    """Modrinth API v2 over the standard library."""
+    """Modrinth API v2 over an Http."""
 
-    def __init__(self, api: str = API, timeout: float = 60.0) -> None:
+    def __init__(self, http: Http, api: str = API) -> None:
+        self.http = http
         self.api = api
-        self.timeout = timeout
-
-    def _open(self, url: str, body: Any = None):
-        data = None if body is None else json.dumps(body).encode()
-        request = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT})
-        if data is not None:
-            request.add_header("Content-Type", "application/json")
-        return urllib.request.urlopen(request, timeout=self.timeout)
 
     def _json(self, path: str, body: Any = None) -> Any:
         url = f"{self.api}{path}"
         try:
-            with self._open(url, body) as response:
-                return json.loads(response.read())
-        except (OSError, ValueError, http.client.HTTPException) as error:
-            raise ModrinthError(f"Modrinth request {url} failed: {error}") from error
+            return json.loads(self.http.get(url, body))
+        except ValueError as error:
+            raise ModrinthError(f"Modrinth answered {url} with bad JSON: {error}") from error
 
     def lookup_sha512(self, hashes: list[str]) -> dict[str, VersionFile]:
         """Versions that Modrinth knows by file hash; unknown hashes are absent."""
@@ -90,7 +60,7 @@ class ModrinthClient:
         return {digest: file for digest, file in files.items() if file is not None}
 
     def find_version(self, project: str, version_number: str, loader: str, game_version: str) -> VersionFile | None:
-        """The primary file of that exact version; None when no version matches, ModrinthError for an unknown project."""
+        """The primary file of that exact version; None when no version matches."""
         query = urllib.parse.urlencode({"loaders": json.dumps([loader]), "game_versions": json.dumps([game_version])})
         versions = self._json(f"/project/{urllib.parse.quote(project, safe='')}/version?{query}")
         try:
@@ -99,21 +69,14 @@ class ModrinthClient:
         except (AttributeError, KeyError, TypeError) as error:
             raise ModrinthError(f"Unexpected Modrinth answer for {project}: {error!r}") from error
 
-    def download(self, url: str, dest: Path, sha512: str) -> None:
-        """Stream `url` into `dest`, which appears only once its sha512 matches."""
-        if urllib.parse.urlsplit(url).scheme != "https":
-            raise ModrinthError(f"Refusing to download {url}: only https urls are allowed.")
-        partial = dest.with_name(dest.name + ".partial")
-        digest = hashlib.sha512()
-        try:
-            with self._open(url) as response, partial.open("wb") as stream:
-                while chunk := response.read(_CHUNK):
-                    digest.update(chunk)
-                    stream.write(chunk)
-            if digest.hexdigest() != sha512:
-                raise HashMismatch(url, sha512, digest.hexdigest())
-            os.replace(partial, dest)
-        except (OSError, http.client.HTTPException) as error:
-            raise ModrinthError(f"Download of {url} failed: {error}") from error
-        finally:
-            partial.unlink(missing_ok=True)
+    def project_sides(self, project_ids: list[str]) -> dict[str, tuple[str, str]]:
+        """(client_side, server_side) per project id, as the mod authors declared them."""
+        sides: dict[str, tuple[str, str]] = {}
+        for start in range(0, len(project_ids), _BATCH):
+            batch = project_ids[start : start + _BATCH]
+            found = self._json(f"/projects?{urllib.parse.urlencode({'ids': json.dumps(batch)})}")
+            try:
+                sides.update({p["id"]: (p["client_side"], p["server_side"]) for p in found})
+            except (KeyError, TypeError) as error:
+                raise ModrinthError(f"Unexpected Modrinth answer to the project lookup: {error!r}") from error
+        return sides

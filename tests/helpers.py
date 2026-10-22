@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from minecraft_setup.engine.gamedir import GameDir
-from minecraft_setup.engine.modrinth import HashMismatch, VersionFile
+from minecraft_setup.engine.http import HashMismatch, HttpError
+from minecraft_setup.engine.modrinth import VersionFile
 from minecraft_setup.engine.mods import PROFILE_GROUPS, ModFile, Profile, list_mods
 from minecraft_setup.engine.state import write_since
 
@@ -92,33 +93,46 @@ def put(root: Path, rel: str, data: bytes | str = b"x") -> Path:
 
 
 class FakeModrinth:
-    """An offline ModrinthClient: serves published files by hash and url."""
+    """An offline ModrinthClient: knows published files by hash."""
 
     def __init__(self) -> None:
         self.files: dict[str, VersionFile] = {}
-        self.served: dict[str, bytes] = {}
-        self.versions: dict[tuple[str, str, str, str], VersionFile] = {}
+        self.sides: dict[str, tuple[str, str]] = {}
         self.lookups: list[list[str]] = []
-        self.downloads: list[str] = []
 
-    def publish(self, data: bytes, file_name: str, project: str = "proj", version: str = "1.0") -> VersionFile:
+    def publish(self, data: bytes, file_name: str, project: str = "proj", sides=("required", "optional")) -> VersionFile:
         digest = sha512(data)
-        found = VersionFile(project, f"{project}-{version}", file_name, f"https://cdn.test/{project}/{file_name}", digest)
+        found = VersionFile(project, f"{project}-v", file_name, f"https://cdn.test/{project}/{file_name}", digest)
         self.files[digest] = found
-        self.served[found.url] = data
-        self.versions[(project, version, "fabric", "26.3")] = found
+        self.sides[project] = sides
         return found
 
     def lookup_sha512(self, hashes: list[str]) -> dict[str, VersionFile]:
         self.lookups.append(list(hashes))
         return {h: self.files[h] for h in hashes if h in self.files}
 
-    def find_version(self, project: str, version_number: str, loader: str, game_version: str) -> VersionFile | None:
-        return self.versions.get((project, version_number, loader, game_version))
+    def project_sides(self, project_ids: list[str]) -> dict[str, tuple[str, str]]:
+        return {p: self.sides[p] for p in project_ids if p in self.sides}
 
-    def download(self, url: str, dest: Path, sha512_hex: str) -> None:
-        self.downloads.append(url)
-        data = self.served[url]
-        if sha512(data) != sha512_hex:
-            raise HashMismatch(url, sha512_hex, sha512(data))
+
+class FakeHttp:
+    """An offline Http: serves bytes by url and records every request."""
+
+    def __init__(self, served: dict[str, bytes] | None = None) -> None:
+        self.served = dict(served or {})
+        self.requests: list[str] = []
+        self.fail: set[str] = set()
+
+    def get(self, url: str, body=None) -> bytes:
+        self.requests.append(url)
+        if url in self.fail or url not in self.served:
+            raise HttpError(f"404 for {url}")
+        return self.served[url]
+
+    def download(self, url: str, dest: Path, *, sha512: str | None = None, sha256: str | None = None) -> None:
+        data = self.get(url)
+        for algo, expected in (("sha512", sha512), ("sha256", sha256)):
+            actual = hashlib.new(algo, data).hexdigest()
+            if expected is not None and actual != expected:
+                raise HashMismatch(url, algo, expected, actual)
         dest.write_bytes(data)
